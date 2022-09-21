@@ -19,6 +19,7 @@ type Peer struct {
 	cfg     Config
 	inbound bool
 	log     log.Logger
+	quit    chan struct{}
 
 	/*
 		stallControl  chan stallControlMsg
@@ -50,6 +51,35 @@ func newPeerBase(config *Config, inbound bool) *Peer {
 		cfg:     *config,
 		inbound: inbound,
 	}
+}
+
+func NewInboundPeer(cfg *Config) *Peer {
+	return newPeerBase(cfg, true)
+}
+
+func NewOutboundPeer(cfg *Config, addr string) (*Peer, error) {
+	p := newPeerBase(cfg, false)
+	p.addr = addr
+
+	/* host, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+
+	port, err := strconv.ParseUint(portStr, 10, 16)
+	if err != nil {
+		return nil, err
+	}
+
+	if cfg.HostToNetAddress != nil {
+		na, err := cfg.HostToNetAddress(host, uint16(port), 0)
+		if err != nil {
+			return nil, err
+		}
+		p.na = na
+	} */
+
+	return p, nil
 }
 
 func (p *Peer) shakeInbound() error {
@@ -91,4 +121,8 @@ func (p *Peer) start() error {
 
 	// p.QueueMessage(protocol.NewMsgVersion(), nil)
 	return nil
+}
+
+func (p *Peer) WaitForDisconnect() {
+	<-p.quit
 }

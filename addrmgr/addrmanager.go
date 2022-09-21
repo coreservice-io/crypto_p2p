@@ -7,10 +7,13 @@ import (
 	"math/rand"
 	"net"
 	"os"
+	"path/filepath"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/coreservice-io/crypto_p2p/protocol"
 	"github.com/coreservice-io/log"
 )
 
@@ -123,6 +126,12 @@ func (am *AddrManager) numAddresses() int {
 	return am.nTried + am.nNew
 }
 
+func NetAddressKey(na *protocol.NetAddress) string {
+	port := strconv.FormatUint(uint64(na.Port), 10)
+
+	return net.JoinHostPort(na.Addr.String(), port)
+}
+
 func (am *AddrManager) addressHandler() {
 	dumpAddressTicker := time.NewTicker(dumpAddressInterval)
 	defer dumpAddressTicker.Stop()
@@ -200,4 +209,16 @@ func (am *AddrManager) Start() {
 	// Start the address ticker to save addresses periodically.
 	am.wg.Add(1)
 	go am.addressHandler()
+}
+
+func New(dataPath string, lookupFunc func(string) ([]net.IP, error)) *AddrManager {
+	am := AddrManager{
+		peersFile:      filepath.Join(dataPath, "peers.json"),
+		lookupFunc:     lookupFunc,
+		rand:           rand.New(rand.NewSource(time.Now().UnixNano())),
+		quit:           make(chan struct{}),
+		localAddresses: make(map[string]*localAddress),
+	}
+	am.reset()
+	return &am
 }
