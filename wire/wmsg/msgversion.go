@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"strings"
 	"time"
 
 	"github.com/coreservice-io/crypto_p2p/wire/wirebase"
@@ -26,7 +25,7 @@ const DefaultUserAgent = "/wire:0.0.1/"
 // communication is allowed to proceed.
 type MsgVersion struct {
 	// Version of the protocol the node is using.
-	ProtocolVersion int32
+	ProtocolVersion uint32
 
 	// Time the message was generated.  This is encoded as an int64 on the wire.
 	Timestamp time.Time
@@ -37,13 +36,8 @@ type MsgVersion struct {
 	// Address of the local peer.
 	AddrMe [32]byte
 
-	// Unique value associated with message that is used to detect self
-	// connections.
+	// Unique value associated with message that is used to detect self connections.
 	Nonce uint64
-
-	// The user agent that generated messsage.  This is a encoded as a varString
-	// on the wire.  This has a max length of MaxUserAgentLen.
-	UserAgent string
 }
 
 func (msg *MsgVersion) Decode(r io.Reader, pver uint32) error {
@@ -70,28 +64,20 @@ func (msg *MsgVersion) Decode(r io.Reader, pver uint32) error {
 			return err
 		}
 	}
+
 	if buf.Len() > 0 {
-		userAgent, err := wirebase.ReadVarString(buf, pver)
+		_, err := wirebase.ReadVarString(buf, pver)
 		if err != nil {
 			return err
 		}
-		err = validateUserAgent(userAgent)
-		if err != nil {
-			return err
-		}
-		msg.UserAgent = userAgent
 	}
 
 	return nil
 }
 
 func (msg *MsgVersion) Encode(w io.Writer, pver uint32) error {
-	err := validateUserAgent(msg.UserAgent)
-	if err != nil {
-		return err
-	}
 
-	err = wirebase.WriteElements(w, msg.ProtocolVersion, msg.Timestamp.Unix())
+	err := wirebase.WriteElements(w, msg.ProtocolVersion, msg.Timestamp.Unix())
 	if err != nil {
 		return err
 	}
@@ -106,7 +92,7 @@ func (msg *MsgVersion) Encode(w io.Writer, pver uint32) error {
 		return err
 	}
 
-	err = wirebase.WriteVarString(w, pver, msg.UserAgent)
+	err = wirebase.WriteVarString(w, pver, "")
 	if err != nil {
 		return err
 	}
@@ -135,7 +121,7 @@ func (msg *MsgVersion) MaxPayloadLength(pver uint32) uint32 {
 // returns a new version message that conforms to the
 // Message interface using the passed parameters and defaults for the remaining
 // fields.
-func NewMsgVersion(me [32]byte, you [32]byte, nonce uint64, protocolVersion int32) *MsgVersion {
+func NewMsgVersion(me [32]byte, you [32]byte, nonce uint64, protocolVersion uint32) *MsgVersion {
 
 	// Limit the timestamp to one second precision since the protocol
 	// doesn't support better.
@@ -145,36 +131,5 @@ func NewMsgVersion(me [32]byte, you [32]byte, nonce uint64, protocolVersion int3
 		AddrYou:         you,
 		AddrMe:          me,
 		Nonce:           nonce,
-		UserAgent:       DefaultUserAgent,
 	}
-}
-
-// validateUserAgent checks userAgent length against MaxUserAgentLen
-func validateUserAgent(userAgent string) error {
-	if len(userAgent) > MaxUserAgentLen {
-		str := fmt.Sprintf("user agent too long [len %v, max %v]",
-			len(userAgent), MaxUserAgentLen)
-		return wirebase.NewMessageError("MsgVersion", str)
-	}
-	return nil
-}
-
-// AddUserAgent adds a user agent to the user agent string for the version message.
-// The version string is not defined to any strict format, although
-// it is recommended to use the form "major.minor.revision" e.g. "2.6.41".
-func (msg *MsgVersion) AddUserAgent(name string, version string,
-	comments ...string) error {
-
-	newUserAgent := fmt.Sprintf("%s:%s", name, version)
-	if len(comments) != 0 {
-		newUserAgent = fmt.Sprintf("%s(%s)", newUserAgent,
-			strings.Join(comments, "; "))
-	}
-	newUserAgent = fmt.Sprintf("%s%s/", msg.UserAgent, newUserAgent)
-	err := validateUserAgent(newUserAgent)
-	if err != nil {
-		return err
-	}
-	msg.UserAgent = newUserAgent
-	return nil
 }

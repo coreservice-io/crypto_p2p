@@ -4,9 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
-	"net"
-	"sync/atomic"
-	"time"
 
 	"github.com/coreservice-io/crypto_p2p/wire"
 	"github.com/coreservice-io/crypto_p2p/wire/wirebase"
@@ -38,25 +35,8 @@ func (p *Peer) readRemoteVersionMsg() error {
 	}
 
 	// Negotiate the protocol version and set the services to what the remote peer advertised.
-	p.flagsMtx.Lock()
-	p.advertisedProtoVer = uint32(msg.ProtocolVersion)
-	p.protocolVersion = minUint32(p.protocolVersion, p.advertisedProtoVer)
-	p.versionKnown = true
-	p.flagsMtx.Unlock()
+	p.protocolVersion = minUint32(p.protocolVersion, uint32(msg.ProtocolVersion))
 	log.Debugf("Negotiated protocol version %d for peer %s", p.protocolVersion, p)
-
-	// Updating a bunch of stats including block based stats, and the
-	// peer's time offset.
-	p.statsMtx.Lock()
-	p.timeOffset = msg.Timestamp.Unix() - time.Now().Unix()
-	p.statsMtx.Unlock()
-
-	// Set the peer's ID, user agent, and potentially the flag which
-	// specifies the witness support is enabled.
-	p.flagsMtx.Lock()
-	p.id = atomic.AddInt32(&nodeCount, 1)
-	p.userAgent = msg.UserAgent
-	p.flagsMtx.Unlock()
 
 	// Notify and disconnect clients that have a protocol version that is too old.
 	if uint32(msg.ProtocolVersion) < MinAcceptableProtocolVersion {
@@ -73,27 +53,13 @@ func (p *Peer) readRemoteVersionMsg() error {
 
 // processRemoteVerAckMsg takes the verack from the remote peer and handles it.
 func (p *Peer) processRemoteVerAckMsg(msg *wmsg.MsgVerAck) {
-	p.flagsMtx.Lock()
-	p.verAckReceived = true
-	p.flagsMtx.Unlock()
+
 }
 
 // creates a version message that can be used to send to the remote peer.
 func (p *Peer) localVersionMsg() (*wmsg.MsgVersion, error) {
 
 	theirNA := p.na
-
-	// If we are behind a proxy and the connection comes from the proxy then
-	// we return an unroutable address as their address. This is to prevent
-	// leaking the tor proxy address.
-	if p.cfg.Proxy != "" {
-		proxyaddress, _, err := net.SplitHostPort(p.cfg.Proxy)
-		// invalid proxy means poorly configured, be on the safe side.
-		if err != nil || p.na.Addr.String() == proxyaddress {
-			emptyIp := net.IP([]byte{0, 0, 0, 0})
-			theirNA = wire.NewNetAddressIPPort(emptyIp, 0)
-		}
-	}
 
 	// Create a wire.NetAddress to use as the
 	// "addrme" in the version message.
@@ -112,8 +78,7 @@ func (p *Peer) localVersionMsg() (*wmsg.MsgVersion, error) {
 	sentNonces.Add(nonce)
 
 	// Version message.
-	msg := wmsg.NewMsgVersion(ourNA.ToBytes(), theirNA.ToBytes(), nonce, int32(p.cfg.ProtocolVersion))
-	msg.AddUserAgent(p.cfg.UserAgentName, p.cfg.UserAgentVersion, []string{""}...)
+	msg := wmsg.NewMsgVersion(ourNA.ToBytes(), theirNA.ToBytes(), nonce, p.cfg.ProtocolVersion)
 
 	return msg, nil
 }
@@ -157,8 +122,7 @@ func (p *Peer) waitToFinishNegotiation(pver uint32) error {
 		case *wmsg.MsgSendAddr:
 			return nil
 		case *wmsg.MsgVerAck:
-			// Receiving a verack means we are done with the
-			// handshake.
+			// Receiving a verack means we are done with the handshake.
 			p.processRemoteVerAckMsg(m)
 			return nil
 		default:

@@ -32,7 +32,7 @@ func startServer(listenAddr string, cfg *peer.Config) error {
 
 		// Create and start the inbound peer.
 		p := peer.NewInboundPeer(cfg)
-		p.AssociateConnection(conn)
+		p.AttachConnection(conn)
 	}()
 
 	return nil
@@ -45,13 +45,13 @@ func startClient(addr string, cfg *peer.Config) (*peer.Peer, error) {
 		return nil, err
 	}
 
-	// Establish the connection to the peer address and mark it connected.
+	// Establish the connection to the peer address.
 	conn, err := net.Dial("tcp", p.Addr())
 	if err != nil {
 		fmt.Printf("net.Dial: error %v\n", err)
 		return nil, err
 	}
-	p.AssociateConnection(conn)
+	p.AttachConnection(conn)
 
 	return p, nil
 }
@@ -62,9 +62,7 @@ func startClient(addr string, cfg *peer.Config) (*peer.Peer, error) {
 func mockRemotePeer() error {
 	// Configure peer to act as a simnet node that offers no services.
 	peerCfg := &peer.Config{
-		UserAgentName:    "test peer", // User agent name to advertise.
-		UserAgentVersion: "1.0.0",     // User agent version to advertise.
-		NetMagic:         SimNet,
+		NetMagic: SimNet,
 		OnMessageHook: peer.MessageWatcher{
 			OnRead: func(p *peer.Peer, bytesRead int, msg wirebase.Message, err error) {
 
@@ -125,9 +123,7 @@ func Example_newOutboundPeer() {
 	verack := make(chan string)
 
 	peerCfg := &peer.Config{
-		UserAgentName:    "peer",  // User agent name to advertise.
-		UserAgentVersion: "1.0.0", // User agent version to advertise.
-		NetMagic:         SimNet,
+		NetMagic: SimNet,
 		OnMessageHook: peer.MessageWatcher{
 			OnRead: func(p *peer.Peer, bytesRead int, msg wirebase.Message, err error) {
 

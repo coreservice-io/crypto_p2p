@@ -72,25 +72,6 @@ func (p *Peer) handlePingMsg(msg *wmsg.MsgPing) {
 	p.QueueMessage(wmsg.NewMsgPong(msg.Nonce), nil)
 }
 
-// invoked when a peer receives a pong message.
-// It updates the ping statistics as required for recent clients.
-func (p *Peer) handlePongMsg(msg *wmsg.MsgPong) {
-	// Arguably we could use a buffered channel here sending data
-	// in a fifo manner whenever we send a ping, or a list keeping track of
-	// the times of each ping. For now we just make a best effort and
-	// only record stats if it was for the last ping sent.
-	// Any preceding and overlapping pings will be ignored. It is unlikely to occur
-	// without large usage of the ping rpc call since we ping infrequently
-	// enough that if they overlap we would have timed out the peer.
-	p.statsMtx.Lock()
-	if p.lastPingNonce != 0 && msg.Nonce == p.lastPingNonce {
-		p.lastPingMicros = time.Since(p.lastPingTime).Nanoseconds()
-		p.lastPingMicros /= 1000 // convert to usec.
-		p.lastPingNonce = 0
-	}
-	p.statsMtx.Unlock()
-}
-
 // isAllowedReadError returns whether or not the passed error is allowed without
 // disconnecting the peer.  In particular, regression tests need to be allowed
 // to send malformed messages without the peer being disconnected.
@@ -119,9 +100,8 @@ func (p *Peer) isAllowedReadError(err error) bool {
 // expected to have come from reading from the remote peer in the inHandler,
 // should be logged and responded to with a reject message.
 func (p *Peer) shouldHandleReadError(err error) bool {
-	// No logging or reject message when the peer is being forcibly
-	// disconnected.
-	if atomic.LoadInt32(&p.disconnect) != 0 {
+	// No logging or reject message when the peer is being forcibly disconnected.
+	if atomic.LoadInt32(&p.connected) != 1 {
 		return false
 	}
 
@@ -137,7 +117,7 @@ func (p *Peer) shouldHandleReadError(err error) bool {
 	return true
 }
 
-// maybeAddDeadline potentially adds a deadline for the appropriate expected
+// potentially adds a deadline for the appropriate expected
 // response for the passed wire protocol command to the pending responses map.
 func (p *Peer) maybeAddDeadline(pendingResponses map[string]time.Time, msgCmd string) {
 	// Setup a deadline for each message being sent that expects a response.
@@ -168,7 +148,7 @@ func (p *Peer) stallHandler() {
 	var handlersStartTime time.Time
 	var deadlineOffset time.Duration
 
-	// pendingResponses tracks the expected response deadline times.
+	// tracks the expected response deadline times.
 	pendingResponses := make(map[string]time.Time)
 
 	// stallTicker is used to periodically check pending responses that have
@@ -296,7 +276,7 @@ func (p *Peer) inHandler() {
 
 	// read message in loop
 out:
-	for atomic.LoadInt32(&p.disconnect) == 0 {
+	for atomic.LoadInt32(&p.connected) != 1 {
 		// Read a message and stop the idle timer as soon as the read is done.
 		// The timer is reset below for the next iteration if needed.
 		//
@@ -343,7 +323,6 @@ out:
 			}
 			break out
 		}
-		atomic.StoreInt64(&p.lastRecv, time.Now().Unix())
 		p.stallControl <- stallControlMsg{sccReceiveMessage, rmsg}
 
 		// Handle each supported message type.
@@ -376,8 +355,8 @@ out:
 		case *wmsg.MsgReject:
 
 		default:
-			log.Debugf("Received unhandled message of type %v "+
-				"from %v", rmsg.Command(), p)
+			log.Debugf("Received unhandled message of type %v from %v",
+				rmsg.Command(), p)
 		}
 		p.stallControl <- stallControlMsg{sccHandlerDone, rmsg}
 
@@ -469,12 +448,12 @@ cleanup:
 	log.Tracef("Peer queue handler done for %s", p)
 }
 
-// shouldLogWriteError returns whether or not the passed error, which is
-// expected to have come from writing to the remote peer in the outHandler,
+// shouldLogWriteError returns whether or not the passed error,
+// which is expected to have come from writing to the remote peer in the outHandler,
 // should be logged.
 func (p *Peer) shouldLogWriteError(err error) bool {
 	// No logging when the peer is being forcibly disconnected.
-	if atomic.LoadInt32(&p.disconnect) != 0 {
+	if atomic.LoadInt32(&p.connected) != 1 {
 		return false
 	}
 
@@ -498,13 +477,6 @@ out:
 	for {
 		select {
 		case omsg := <-p.sendQueue:
-			switch m := omsg.msg.(type) {
-			case *wmsg.MsgPing:
-				p.statsMtx.Lock()
-				p.lastPingNonce = m.Nonce
-				p.lastPingTime = time.Now()
-				p.statsMtx.Unlock()
-			}
 
 			p.stallControl <- stallControlMsg{sccSendMessage, omsg.msg}
 
@@ -520,11 +492,9 @@ out:
 				continue
 			}
 
-			// At this point, the message was successfully sent, so
-			// update the last send time, signal the sender of the
-			// message that it has been sent (if requested), and
-			// signal the send queue to the deliver the next queued message.
-			atomic.StoreInt64(&p.lastSend, time.Now().Unix())
+			// At this point, the message was successfully sent,
+			// signal the sender of the message that it has been sent (if requested),
+			// and signal the send queue to the deliver the next queued message.
 			if omsg.doneChan != nil {
 				omsg.doneChan <- struct{}{}
 			}
@@ -555,29 +525,6 @@ cleanup:
 	}
 	close(p.outQuit)
 	log.Tracef("Peer output handler done for %s", p)
-}
-
-// pingHandler periodically pings the peer.
-// It must be run as a goroutine.
-func (p *Peer) pingHandler() {
-	pingTicker := time.NewTicker(pingInterval)
-	defer pingTicker.Stop()
-
-out:
-	for {
-		select {
-		case <-pingTicker.C:
-			nonce, err := wirebase.RandomUint64()
-			if err != nil {
-				log.Errorf("Not sending ping to %s: %v", p, err)
-				continue
-			}
-			p.QueueMessage(wmsg.NewMsgPing(nonce), nil)
-
-		case <-p.quit:
-			break out
-		}
-	}
 }
 
 // adds the passed message to the peer send queue.

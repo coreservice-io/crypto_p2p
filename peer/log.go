@@ -88,8 +88,7 @@ func sanitizeString(str string, maxLength uint) string {
 func messageSummary(msg wirebase.Message) string {
 	switch msg := msg.(type) {
 	case *wmsg.MsgVersion:
-		return fmt.Sprintf("agent %s, pver %d",
-			msg.UserAgent, msg.ProtocolVersion)
+		return fmt.Sprintf("pver %d", msg.ProtocolVersion)
 
 	case *wmsg.MsgVerAck:
 		// No summary.

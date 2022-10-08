@@ -113,24 +113,12 @@ func (na *NetAddress) TorV3Key() byte {
 // attempts to extract the IP address and port from the passed net.Addr interface
 // and create a NetAddress structure using that information.
 func NewNetAddress(addr net.Addr) (*NetAddress, error) {
-	// addr will be a net.TCPAddr when not using a proxy.
 	if tcpAddr, ok := addr.(*net.TCPAddr); ok {
 		ip := tcpAddr.IP
 		port := uint16(tcpAddr.Port)
 		na := NewNetAddressIPPort(ip, port)
 		return na, nil
 	}
-
-	// addr will be a socks.ProxiedAddr when using a proxy.
-	// if proxiedAddr, ok := addr.(*socks.ProxiedAddr); ok {
-	// 	ip := net.ParseIP(proxiedAddr.Host)
-	// 	if ip == nil {
-	// 		ip = net.ParseIP("0.0.0.0")
-	// 	}
-	// 	port := uint16(proxiedAddr.Port)
-	// 	na := NewNetAddressIPPort(ip, port)
-	// 	return na, nil
-	// }
 
 	// For the most part, addr should be one of the two above cases,
 	// but to be safe, fall back to trying to parse the information from the
