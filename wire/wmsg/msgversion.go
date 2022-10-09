@@ -100,25 +100,13 @@ func (msg *MsgVersion) Encode(w io.Writer, pver uint32) error {
 	return nil
 }
 
-// Command returns the protocol command string for the message.  This is part
-// of the Message interface implementation.
-func (msg *MsgVersion) Command() string {
-	return CmdVersion
+// Command returns the protocol command string for the message.
+// This is part of the Message interface implementation.
+func (msg *MsgVersion) Command() uint32 {
+	return CMD_VERSION
 }
 
-// MaxPayloadLength returns the maximum length the payload can be for the
-// receiver.  This is part of the Message interface implementation.
-func (msg *MsgVersion) MaxPayloadLength(pver uint32) uint32 {
-	// XXX: <= 106 different
-
-	// Protocol version 4 bytes + services 8 bytes + timestamp 8 bytes +
-	// remote and local net addresses + nonce 8 bytes +
-	// length of user agent (varInt) + max allowed useragent length
-	return 33 + (30 * 2) +
-		wirebase.MaxVarIntPayload + MaxUserAgentLen
-}
-
-// returns a new version message that conforms to the
+// returns a new version message that confirms to the
 // Message interface using the passed parameters and defaults for the remaining
 // fields.
 func NewMsgVersion(me [32]byte, you [32]byte, nonce uint64, protocolVersion uint32) *MsgVersion {

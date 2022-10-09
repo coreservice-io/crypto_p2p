@@ -240,7 +240,6 @@ func readElement(r io.Reader, element interface{}) error {
 		}
 		return nil
 
-	// Message header checksum.
 	case *[4]byte:
 		_, err := io.ReadFull(r, e[:])
 		if err != nil {
@@ -248,7 +247,6 @@ func readElement(r io.Reader, element interface{}) error {
 		}
 		return nil
 
-	// Message header command.
 	case *[12]byte:
 		_, err := io.ReadFull(r, e[:])
 		if err != nil {
@@ -349,7 +347,6 @@ func writeElement(w io.Writer, element interface{}) error {
 		}
 		return nil
 
-	// Message header checksum.
 	case [4]byte:
 		_, err := w.Write(e[:])
 		if err != nil {
@@ -357,7 +354,6 @@ func writeElement(w io.Writer, element interface{}) error {
 		}
 		return nil
 
-	// Message header command.
 	case [12]byte:
 		_, err := w.Write(e[:])
 		if err != nil {
@@ -365,7 +361,6 @@ func writeElement(w io.Writer, element interface{}) error {
 		}
 		return nil
 
-	// IP address.
 	case [16]byte:
 		_, err := w.Write(e[:])
 		if err != nil {
@@ -528,9 +523,9 @@ func ReadVarString(r io.Reader, pver uint32) (string, error) {
 	// Prevent variable length strings that are larger than the maximum
 	// message size.  It would be possible to cause memory exhaustion and
 	// panics without a sane upper bound on this count.
-	if count > MaxMessagePayload {
+	if count > MSG_MAX_PAYLOAD_SIZE {
 		str := fmt.Sprintf("variable length string is too long "+
-			"[count %d, max %d]", count, MaxMessagePayload)
+			"[count %d, max %d]", count, MSG_MAX_PAYLOAD_SIZE)
 		return "", NewMessageError("ReadVarString", str)
 	}
 

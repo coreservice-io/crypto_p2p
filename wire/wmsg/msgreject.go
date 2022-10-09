@@ -13,26 +13,20 @@ type RejectCode uint8
 
 // These constants define the various supported reject codes.
 const (
-	RejectMalformed       RejectCode = 0x01
-	RejectInvalid         RejectCode = 0x10
-	RejectObsolete        RejectCode = 0x11
-	RejectDuplicate       RejectCode = 0x12
-	RejectNonstandard     RejectCode = 0x40
-	RejectDust            RejectCode = 0x41
-	RejectInsufficientFee RejectCode = 0x42
-	RejectCheckpoint      RejectCode = 0x43
+	RejectMalformed   RejectCode = 0x01
+	RejectInvalid     RejectCode = 0x10
+	RejectObsolete    RejectCode = 0x11
+	RejectDuplicate   RejectCode = 0x12
+	RejectNonstandard RejectCode = 0x40
 )
 
 // Map of reject codes back strings for pretty printing.
 var rejectCodeStrings = map[RejectCode]string{
-	RejectMalformed:       "REJECT_MALFORMED",
-	RejectInvalid:         "REJECT_INVALID",
-	RejectObsolete:        "REJECT_OBSOLETE",
-	RejectDuplicate:       "REJECT_DUPLICATE",
-	RejectNonstandard:     "REJECT_NONSTANDARD",
-	RejectDust:            "REJECT_DUST",
-	RejectInsufficientFee: "REJECT_INSUFFICIENTFEE",
-	RejectCheckpoint:      "REJECT_CHECKPOINT",
+	RejectMalformed:   "REJECT_MALFORMED",
+	RejectInvalid:     "REJECT_INVALID",
+	RejectObsolete:    "REJECT_OBSOLETE",
+	RejectDuplicate:   "REJECT_DUPLICATE",
+	RejectNonstandard: "REJECT_NONSTANDARD",
 }
 
 // String returns the RejectCode in human-readable form.
@@ -44,14 +38,14 @@ func (code RejectCode) String() string {
 	return fmt.Sprintf("Unknown RejectCode (%d)", uint8(code))
 }
 
-// MsgReject implements the Message interface and represents a bitcoin reject message.
+// MsgReject implements the Message interface and represents a reject message.
 type MsgReject struct {
 	// Cmd is the command for the message which was rejected such as
 	// as CmdBlock or CmdTx.  This can be obtained from the Command function
 	// of a Message.
-	Cmd string
+	Cmd uint32
 
-	// RejectCode is a code indicating why the command was rejected.  It
+	// is a code indicating why the command was rejected.  It
 	// is encoded as a uint8 on the wire.
 	Code RejectCode
 
@@ -63,11 +57,11 @@ type MsgReject struct {
 func (msg *MsgReject) Decode(r io.Reader, pver uint32) error {
 
 	// Command that was rejected.
-	cmd, err := wirebase.ReadVarString(r, pver)
+	cmd, err := wirebase.ReadVarInt(r, pver)
 	if err != nil {
 		return err
 	}
-	msg.Cmd = cmd
+	msg.Cmd = uint32(cmd)
 
 	// Code indicating why the command was rejected.
 	var code uint8
@@ -91,7 +85,7 @@ func (msg *MsgReject) Decode(r io.Reader, pver uint32) error {
 func (msg *MsgReject) Encode(w io.Writer, pver uint32) error {
 
 	// Command that was rejected.
-	err := wirebase.WriteVarString(w, pver, msg.Cmd)
+	err := wirebase.WriteVarInt(w, pver, uint64(msg.Cmd))
 	if err != nil {
 		return err
 	}
@@ -114,22 +108,13 @@ func (msg *MsgReject) Encode(w io.Writer, pver uint32) error {
 
 // Command returns the protocol command string for the message.
 // This is part of the Message interface implementation.
-func (msg *MsgReject) Command() string {
-	return CmdReject
+func (msg *MsgReject) Command() uint32 {
+	return CMD_REJECT
 }
 
-// MaxPayloadLength returns the maximum length the payload can be for the receiver.
-// This is part of the Message interface implementation.
-func (msg *MsgReject) MaxPayloadLength(pver uint32) uint32 {
-	plen := uint32(0)
-	plen = wirebase.MaxMessagePayload
-
-	return plen
-}
-
-// NewMsgReject returns a new reject message that conforms to the
-// Message interface.  See MsgReject for details.
-func NewMsgReject(command string, code RejectCode, reason string) *MsgReject {
+// NewMsgReject returns a new reject message that confirms to the
+// Message interface.
+func NewMsgReject(command uint32, code RejectCode, reason string) *MsgReject {
 	return &MsgReject{
 		Cmd:    command,
 		Code:   code,

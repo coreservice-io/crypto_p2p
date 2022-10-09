@@ -2,9 +2,12 @@ package peer
 
 import (
 	"container/list"
+	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -18,7 +21,6 @@ import (
 type outMsg struct {
 	msg      wirebase.Message
 	doneChan chan<- struct{}
-	encoding wirebase.MessageEncoding
 }
 
 // stallControlCmd represents the command of a stall control message.
@@ -50,7 +52,7 @@ type stallControlMsg struct {
 // sends a reject message for the provided command, reject code, reject reason, and hash.
 // The wait parameter will cause the function to block
 // until the reject message has actually been sent.
-func (p *Peer) PushRejectMsg(command string, code wmsg.RejectCode, reason string, wait bool) {
+func (p *Peer) PushRejectMsg(command uint32, code wmsg.RejectCode, reason string, wait bool) {
 
 	msg := wmsg.NewMsgReject(command, code, reason)
 
@@ -64,12 +66,6 @@ func (p *Peer) PushRejectMsg(command string, code wmsg.RejectCode, reason string
 	doneChan := make(chan struct{}, 1)
 	p.QueueMessage(msg, doneChan)
 	<-doneChan
-}
-
-// invoked when a peer receives a ping message, it replies with a pong message.
-func (p *Peer) handlePingMsg(msg *wmsg.MsgPing) {
-	// Include nonce from ping so pong can be identified.
-	p.QueueMessage(wmsg.NewMsgPong(msg.Nonce), nil)
 }
 
 // isAllowedReadError returns whether or not the passed error is allowed without
@@ -119,7 +115,7 @@ func (p *Peer) shouldHandleReadError(err error) bool {
 
 // potentially adds a deadline for the appropriate expected
 // response for the passed wire protocol command to the pending responses map.
-func (p *Peer) maybeAddDeadline(pendingResponses map[string]time.Time, msgCmd string) {
+func (p *Peer) maybeAddDeadline(pendingResponses map[uint32]time.Time, msgCmd uint32) {
 	// Setup a deadline for each message being sent that expects a response.
 	//
 	// NOTE:
@@ -129,9 +125,9 @@ func (p *Peer) maybeAddDeadline(pendingResponses map[string]time.Time, msgCmd st
 	// response won't be received in time.
 	deadline := time.Now().Add(stallResponseTimeout)
 	switch msgCmd {
-	case wmsg.CmdVersion:
+	case wmsg.CMD_VERSION:
 		// Expects a verack message.
-		pendingResponses[wmsg.CmdVerAck] = deadline
+		pendingResponses[wmsg.CMD_VERACK] = deadline
 	}
 }
 
@@ -149,7 +145,7 @@ func (p *Peer) stallHandler() {
 	var deadlineOffset time.Duration
 
 	// tracks the expected response deadline times.
-	pendingResponses := make(map[string]time.Time)
+	pendingResponses := make(map[uint32]time.Time)
 
 	// stallTicker is used to periodically check pending responses that have
 	// exceeded the expected deadline and disconnect the peer due to stalling.
@@ -281,12 +277,12 @@ out:
 		// The timer is reset below for the next iteration if needed.
 		//
 		// block IO here
-		rmsg, _, err := p.readMessage(p.wireEncoding)
+		rmsg, _, err := p.readMessage()
 		idleTimer.Stop()
 		if err != nil {
-			// In order to allow regression tests with malformed messages, don't
-			// disconnect the peer when we're in regression test mode and the
-			// error is one of the allowed errors.
+			// In order to allow regression tests with malformed messages,
+			// don't disconnect the peer when we're in regression test mode
+			// and the error is one of the allowed errors.
 			if p.isAllowedReadError(err) {
 				log.Errorf("Allowed test error from %s: %v", p, err)
 				idleTimer.Reset(idleTimeout)
@@ -319,7 +315,7 @@ out:
 				// at least that much of the message was valid, but that is not
 				// currently exposed by wire, so just used malformed for the
 				// command.
-				p.PushRejectMsg("malformed", wmsg.RejectMalformed, errMsg, true)
+				p.PushRejectMsg(wmsg.CMD_REJECT, wmsg.RejectMalformed, errMsg, true)
 			}
 			break out
 		}
@@ -346,17 +342,15 @@ out:
 			// Disconnect if peer sends this after the handshake is completed
 			break out
 
-		case *wmsg.MsgPing:
-			p.handlePingMsg(msg)
-
-		case *wmsg.MsgPong:
-			p.handlePongMsg(msg)
-
 		case *wmsg.MsgReject:
 
 		default:
-			log.Debugf("Received unhandled message of type %v from %v",
-				rmsg.Command(), p)
+			if handler := GetPeerManager().GetHandler(rmsg.Command()); handler != nil {
+				handler(rmsg, p)
+			} else {
+				log.Debugf("Received unhandled message of type %v from %v",
+					rmsg.Command(), p)
+			}
 		}
 		p.stallControl <- stallControlMsg{sccHandlerDone, rmsg}
 
@@ -480,7 +474,7 @@ out:
 
 			p.stallControl <- stallControlMsg{sccSendMessage, omsg.msg}
 
-			err := p.writeMessage(omsg.msg, omsg.encoding)
+			err := p.writeMessage(omsg.msg)
 			if err != nil {
 				p.Disconnect()
 				if p.shouldLogWriteError(err) {
@@ -529,12 +523,6 @@ cleanup:
 
 // adds the passed message to the peer send queue.
 func (p *Peer) QueueMessage(msg wirebase.Message, doneChan chan<- struct{}) {
-	p.QueueMessageWithEncoding(msg, doneChan, wirebase.BaseEncoding)
-}
-
-// adds the passed message to the peer send queue.
-func (p *Peer) QueueMessageWithEncoding(msg wirebase.Message, doneChan chan<- struct{},
-	encoding wirebase.MessageEncoding) {
 
 	// Avoid risk of deadlock if goroutine already exited.
 	// The goroutine we will be sending to hangs around until it knows for a fact that
@@ -547,5 +535,64 @@ func (p *Peer) QueueMessageWithEncoding(msg wirebase.Message, doneChan chan<- st
 		}
 		return
 	}
-	p.outputQueue <- outMsg{msg: msg, encoding: encoding, doneChan: doneChan}
+
+	content_len := len(content)
+
+	p.outputQueue <- outMsg{msg: msg, doneChan: doneChan}
+}
+
+func (p *Peer) send_msg(p_msg *wmsg.MsgData, content []byte) error {
+
+	msg_id := p_msg.Id
+	msg_cmd := p_msg.Msg_cmd
+
+	content_len := len(content)
+
+	// chunks >=1
+	chunks := int(math.Ceil(float64(content_len) / wirebase.MSG_PAYLOAD_MAX_LEN))
+	if chunks == 0 {
+		chunks = 1
+	}
+
+	if chunks > wirebase.MSG_DATA_CHUNKS_NUM {
+		return errors.New("send_msg chunks exceed limit, chunks: " + strconv.Itoa(chunks))
+	}
+
+	for i := 0; i < chunks; i++ {
+
+		var msg_cmd_ uint32 = 0
+		var msg_eof_ uint8 = 0
+
+		if i == 0 {
+			msg_cmd_ = msg_cmd
+		}
+
+		if i == chunks-1 {
+			msg_eof_ = 1
+		}
+
+		start := i * wirebase.MSG_PAYLOAD_MAX_LEN
+		end := (i + 1) * wirebase.MSG_PAYLOAD_MAX_LEN
+
+		if end >= content_len {
+			end = content_len
+		}
+
+		payload := msg.Encode_msg(&wmsg.MsgHeader{
+			Cmd:          msg_cmd_,
+			EOF:          msg_eof_,
+			Id:           msg_id,
+			Payload_size: uint32(end - start),
+		}, content[start:end])
+
+		timeout := time.Now().Add(PEER_MSG_WRITE_TIMEOUT_SECS * time.Second)
+
+		_, err := p.iowriter.Write(payload, timeout)
+
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

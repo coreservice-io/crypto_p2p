@@ -9,55 +9,42 @@ const (
 	MaxVarIntPayload = 9
 )
 
-// CommandSize is the fixed size of all commands in the common message
-// header.  Shorter commands must be zero padded.
-const CommandSize = 12
+const MSG_PAYLOAD_MAX_LEN = 1024 * 8 // 8KB
 
-// MaxMessagePayload is the maximum bytes a message can be regardless of other
-// individual limits imposed by messages themselves.
-const MaxMessagePayload = (1024 * 1024 * 1) // Unit MB
+// number for maxium size of a single message.
+const MSG_DATA_CHUNKS_NUM = 1024
+
+// the maximum bytes of a single message 8MB
+const MSG_MAX_PAYLOAD_SIZE = (MSG_PAYLOAD_MAX_LEN * MSG_DATA_CHUNKS_NUM)
 
 // represents which network a message belongs to.
 type NetMagic uint32
-
-// MessageEncoding represents the wire message encoding format to be used.
-type MessageEncoding uint32
-
-const (
-	// BaseEncoding encodes all messages in the default format specified
-	// for the wire protocol.
-	BaseEncoding MessageEncoding = 1 << iota
-
-	// WitnessEncoding encodes all messages other than transaction messages
-	WitnessEncoding
-)
-
-// LatestEncoding is the most recently specified encoding for the wire
-// protocol.
-var LatestEncoding = WitnessEncoding
 
 // Message is an interface that describes a message.  A type that
 // implements Message has complete control over the representation of its data
 // and may therefore contain additional or fewer fields than those which
 // are used directly in the protocol encoded message.
 type Message interface {
-	Command() string
-	MaxPayloadLength(uint32) uint32
+	Command() uint32
 	Decode(io.Reader, uint32) error
 	Encode(io.Writer, uint32) error
 }
 
-// MessageHeaderSize is the number of bytes in a message header.
-// network (magic) 4 bytes + command 12 bytes + payload length 4 bytes +
-// checksum 4 bytes.
-const MessageHeaderSize = 24
+// the number of bytes in a message header.
+// network (magic) 4 bytes + command 4 bytes +
+// payload length 4 bytes
+const MSG_HEADER_SIZE = 28
 
 // messageHeader defines the header structure for all protocol messages.
 type messageHeader struct {
-	magic    uint32  // 4 bytes
-	command  string  // 12 bytes
-	length   uint32  // 4 bytes
-	checksum [4]byte // 4 bytes
+	magic uint32 // 4 bytes
+	id    uint32 // 4 bytes a unique random number which assigned by request side
+	// respid  uint32 // 4 bytes
+	command uint32 // 4 bytes
+	length  uint32 // 4 bytes
+	flag    uint32 // 4 bytes
+	ck_idx  uint32
+	ck_size uint32
 }
 
-type MakeEmptyMessage func(command string) (Message, error)
+type MakeEmptyMessage func(command uint32) (Message, error)

@@ -1,8 +1,10 @@
 package peer
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"math/rand"
 	"net"
 	"strconv"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/coreservice-io/crypto_p2p/wire"
 	"github.com/coreservice-io/crypto_p2p/wire/wirebase"
+	"github.com/coreservice-io/crypto_p2p/wire/wmsg"
 
 	"github.com/decred/dcrd/lru"
 )
@@ -102,15 +105,19 @@ type Peer struct {
 	literalAddr string
 	cfg         Config
 
-	conn        net.Conn
+	conn     net.Conn
+	ioreader io.Reader
+	iowriter io.Writer
+
 	connected   int32
 	connectedAt time.Time
+
+	longMessages  sync.Map
+	requestRouter sync.Map
 
 	flagsMtx        sync.Mutex       // protects the peer flags below
 	na              *wire.NetAddress // Y
 	protocolVersion uint32           // Y negotiated protocol version
-
-	wireEncoding wirebase.MessageEncoding
 
 	// These fields keep track of statistics for the peer and are protected
 	// by the statsMtx mutex.
@@ -177,6 +184,39 @@ func newPeerBase(origCfg *Config, inbound bool) *Peer {
 	return &p
 }
 
+// returns a new inbound peer.
+// Use Start to begin processing incoming and outgoing messages.
+func NewInboundPeer(cfg *Config) *Peer {
+	return newPeerBase(cfg, true)
+}
+
+// returns a new outbound peer.
+// connecting to anything other than an ipv4 or
+// ipv6 address will fail and may cause a nil-pointer-dereference.
+// This includes hostnames and onion services.
+func NewOutboundPeer(cfg *Config, remoteAddr string) (*Peer, error) {
+	p := newPeerBase(cfg, false)
+	p.literalAddr = remoteAddr
+
+	host, portStr, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		return nil, err
+	}
+
+	port, err := strconv.ParseUint(portStr, 10, 16)
+	if err != nil {
+		return nil, err
+	}
+
+	// If host is an onion hidden service or a hostname,
+	// it is likely that a nil-pointer-dereference will occur.
+	p.na = wire.NetAddressFromBytes(
+		time.Now(), net.ParseIP(host), uint16(port),
+	)
+
+	return p, nil
+}
+
 // start begins processing input and output messages.
 func (p *Peer) start() error {
 	log.Tracef("Starting peer %s", p)
@@ -215,37 +255,29 @@ func (p *Peer) start() error {
 	return nil
 }
 
-// returns a new inbound peer.
-// Use Start to begin processing incoming and outgoing messages.
-func NewInboundPeer(cfg *Config) *Peer {
-	return newPeerBase(cfg, true)
-}
+func (p *Peer) Send(msg_cmd uint32, raw_msg []byte) ([]byte, error) {
 
-// returns a new outbound peer.
-// connecting to anything other than an ipv4 or
-// ipv6 address will fail and may cause a nil-pointer-dereference.
-// This includes hostnames and onion services.
-func NewOutboundPeer(cfg *Config, remoteAddr string) (*Peer, error) {
-	p := newPeerBase(cfg, false)
-	p.literalAddr = remoteAddr
-
-	host, portStr, err := net.SplitHostPort(remoteAddr)
-	if err != nil {
-		return nil, err
+	p_msg := &wmsg.MsgData{
+		Id:         rand.Uint32(),
+		Msg_cmd:    msg_cmd,
+		Msg_chunks: make(chan int32, wirebase.MSG_DATA_CHUNKS_NUM+1), // +1 for eof
+		Msg_buffer: bytes.NewBuffer([]byte{}),
 	}
 
-	port, err := strconv.ParseUint(portStr, 10, 16)
-	if err != nil {
-		return nil, err
+	p.requestRouter.Store(p_msg.Id, p_msg)
+	defer p.requestRouter.Delete(p_msg.Id)
+
+	// encode the message and send chunk by chunk with writetime out
+	p.QueueMessage(wmsg.NewMsgData(raw_msg), nil)
+
+	// after send finished,
+	// start to receive from msg_buffer chunk by chunk with readtimeout
+	r, r_err := p_msg.Receive()
+	if r_err != nil {
+		return nil, r_err
 	}
 
-	// If host is an onion hidden service or a hostname,
-	// it is likely that a nil-pointer-dereference will occur.
-	p.na = wire.NetAddressFromBytes(
-		time.Now(), net.ParseIP(host), uint16(port),
-	)
-
-	return p, nil
+	return r, nil
 }
 
 func init() {

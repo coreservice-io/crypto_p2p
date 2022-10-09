@@ -6,14 +6,18 @@ import (
 	"github.com/coreservice-io/crypto_p2p/wire/wirebase"
 )
 
+const CMD_TEST_INFO = 4
+const CMD_TEST_CHAT = 5
+
 // Commands used in message headers which describe the type of message.
 const (
-	CmdVersion  = "version"
-	CmdVerAck   = "verack"
-	CmdReject   = "reject"
-	CmdPing     = "ping"
-	CmdPong     = "pong"
-	CmdSendAddr = "sendaddr"
+	CMD_VERSION = iota
+	CMD_VERACK
+	CMD_REJECT
+	CMD_PING
+	CMD_PONG
+	CMD_SENDADDR
+	CMD_MSGDATA
 )
 
 // ErrUnknownMessage is the error returned when decoding an unknown message.
@@ -25,25 +29,25 @@ var ErrInvalidHandshake = fmt.Errorf("invalid message during handshake")
 
 // makeEmptyMessage creates a message of the appropriate concrete type based
 // on the command.
-func MakeEmptyMessage(command string) (wirebase.Message, error) {
+func MakeEmptyMessage(command uint32) (wirebase.Message, error) {
 	var msg wirebase.Message
 	switch command {
-	case CmdVersion:
+	case CMD_VERSION:
 		msg = &MsgVersion{}
 
-	case CmdVerAck:
+	case CMD_VERACK:
 		msg = &MsgVerAck{}
 
-	case CmdPing:
+	case CMD_PING:
 		msg = &MsgPing{}
 
-	case CmdPong:
+	case CMD_PONG:
 		msg = &MsgPong{}
 
-	case CmdReject:
+	case CMD_REJECT:
 		msg = &MsgReject{}
 
-	case CmdSendAddr:
+	case CMD_SENDADDR:
 		msg = &MsgSendAddr{}
 
 	default:

@@ -41,9 +41,6 @@ func maxNetAddressV2Payload() uint32 {
 	// The timestamp takes up four bytes.
 	plen := uint32(4)
 
-	// The ServiceFlag is a varint and its maximum size is 9 bytes.
-	plen += 9
-
 	// The netID is a single byte.
 	plen += 1
 

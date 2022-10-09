@@ -59,8 +59,9 @@ func directionString(inbound bool) string {
 	return "outbound"
 }
 
-// sanitizeString strips any characters which are even remotely dangerous, such
-// as html control characters, from the passed string.  It also limits it to
+// sanitizeString strips any characters which are even remotely dangerous,
+// such as html control characters, from the passed string.
+// It also limits it to
 // the passed maximum size, which can be 0 for unlimited.  When the string is
 // limited, it will also add "..." to the string to indicate it was truncated.
 func sanitizeString(str string, maxLength uint) string {
@@ -83,8 +84,9 @@ func sanitizeString(str string, maxLength uint) string {
 	return str
 }
 
-// messageSummary returns a human-readable string which summarizes a message.
-// Not all messages have or need a summary.  This is used for debug logging.
+// returns a human-readable string which summarizes a message.
+// Not all messages have or need a summary.
+// This is used for debug logging.
 func messageSummary(msg wirebase.Message) string {
 	switch msg := msg.(type) {
 	case *wmsg.MsgVersion:
@@ -104,9 +106,8 @@ func messageSummary(msg wirebase.Message) string {
 		// characters which are even remotely dangerous such as HTML
 		// control characters, etc.  Also limit them to sane length for
 		// logging.
-		rejCommand := sanitizeString(msg.Cmd, wirebase.CommandSize)
 		rejReason := sanitizeString(msg.Reason, maxRejectReasonLen)
-		summary := fmt.Sprintf("cmd %v, code %v, reason %v", rejCommand,
+		summary := fmt.Sprintf("cmd %d, code %v, reason %v", msg.Cmd,
 			msg.Code, rejReason)
 
 		return summary

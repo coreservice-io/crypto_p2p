@@ -21,17 +21,11 @@ func (msg *MsgVerAck) Encode(w io.Writer, pver uint32) error {
 
 // Command returns the protocol command string for the message.  This is part
 // of the Message interface implementation.
-func (msg *MsgVerAck) Command() string {
-	return CmdVerAck
+func (msg *MsgVerAck) Command() uint32 {
+	return CMD_VERACK
 }
 
-// returns the maximum length the payload can be for the
-// receiver.  This is part of the Message interface implementation.
-func (msg *MsgVerAck) MaxPayloadLength(pver uint32) uint32 {
-	return 0
-}
-
-// returns a new verack message that conforms to the
+// returns a new verack message that confirms to the
 // Message interface.
 func NewMsgVerAck() *MsgVerAck {
 	return &MsgVerAck{}

@@ -15,6 +15,10 @@ const (
 // periodically pings the peer.
 // It must be run as a goroutine.
 func (p *Peer) pingHandler() {
+
+	GetPeerManager().RegHandler(wmsg.CMD_PING, handlePingMsg)
+	GetPeerManager().RegHandler(wmsg.CMD_PONG, handlePongMsg)
+
 	pingTicker := time.NewTicker(pingInterval)
 	defer pingTicker.Stop()
 
@@ -41,9 +45,22 @@ out:
 	}
 }
 
+// invoked when a peer receives a ping message, it replies with a pong message.
+func handlePingMsg(m wirebase.Message, p *Peer) error {
+
+	msg := m.(*wmsg.MsgPing)
+	// Include nonce from ping so pong can be identified.
+	p.QueueMessage(wmsg.NewMsgPong(msg.Nonce), nil)
+
+	return nil
+}
+
 // invoked when a peer receives a pong message.
 // It updates the ping statistics as required for recent clients.
-func (p *Peer) handlePongMsg(msg *wmsg.MsgPong) {
+func handlePongMsg(m wirebase.Message, p *Peer) error {
+
+	msg := m.(*wmsg.MsgPong)
+
 	// Arguably we could use a buffered channel here sending data
 	// in a fifo manner whenever we send a ping, or a list keeping track of
 	// the times of each ping. For now we just make a best effort and
@@ -58,4 +75,6 @@ func (p *Peer) handlePongMsg(msg *wmsg.MsgPong) {
 		p.lastPingNonce = 0
 	}
 	p.statsMtx.Unlock()
+
+	return nil
 }

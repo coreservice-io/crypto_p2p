@@ -120,7 +120,7 @@ func Example_newOutboundPeer() {
 	// messages.
 	// The verack listener is used here to signal the code below
 	// when the handshake has been finished by signalling a channel.
-	verack := make(chan string)
+	verack := make(chan uint32)
 
 	peerCfg := &peer.Config{
 		NetMagic: SimNet,
@@ -143,7 +143,7 @@ func Example_newOutboundPeer() {
 
 				fmt.Println("outbound: ", msg.Command())
 
-				if msg.Command() == wmsg.CmdVerAck {
+				if msg.Command() == wmsg.CMD_VERACK {
 					verack <- msg.Command()
 				}
 			},

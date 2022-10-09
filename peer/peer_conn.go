@@ -1,6 +1,7 @@
 package peer
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"net"
@@ -26,6 +27,8 @@ func (p *Peer) AttachConnection(conn net.Conn) {
 
 	p.conn = conn
 	p.connectedAt = time.Now()
+	p.ioreader = bufio.NewReaderSize(p.conn, wirebase.MSG_PAYLOAD_MAX_LEN)
+	p.iowriter = bufio.NewWriterSize(p.conn, wirebase.MSG_PAYLOAD_MAX_LEN)
 
 	if p.inbound {
 
@@ -63,18 +66,17 @@ func (p *Peer) Disconnect() {
 	close(p.quit)
 }
 
-// waits until the peer has completely disconnected and all
-// resources are cleaned up.
-// This will happen if either the local or remote side has been
-// disconnected or the peer is forcibly disconnected via Disconnect.
+// waits until the peer has completely disconnected and all resources are cleaned up.
+// This will happen if either the local or remote side has been disconnected
+// or the peer is forcibly disconnected via Disconnect.
 func (p *Peer) WaitForDisconnect() {
 	<-p.quit
 }
 
 // reads the next message from the peer with logging.
-func (p *Peer) readMessage(enc wirebase.MessageEncoding) (wirebase.Message, []byte, error) {
-	n, msg, buf, err := wirebase.ReadMessageWithEncodingN(p.conn,
-		p.ProtocolVersion(), p.cfg.NetMagic, wmsg.MakeEmptyMessage, enc)
+func (p *Peer) readMessage() (wirebase.Message, []byte, error) {
+	n, msg, buf, err := wirebase.ReadMessage(p.ioreader, p.longMessages,
+		p.ProtocolVersion(), p.cfg.NetMagic, wmsg.MakeEmptyMessage)
 
 	if p.cfg.OnMessageHook.OnRead != nil {
 		p.cfg.OnMessageHook.OnRead(p, n, msg, err)
@@ -105,8 +107,8 @@ func (p *Peer) readMessage(enc wirebase.MessageEncoding) (wirebase.Message, []by
 	return msg, buf, nil
 }
 
-// writeMessage sends a bitcoin message to the peer with logging.
-func (p *Peer) writeMessage(msg wirebase.Message, enc wirebase.MessageEncoding) error {
+// sends a message to the peer with logging.
+func (p *Peer) writeMessage(msg wirebase.Message) error {
 	// Don't do anything if we're disconnecting.
 	if atomic.LoadInt32(&p.connected) != 1 {
 		return nil
@@ -128,8 +130,8 @@ func (p *Peer) writeMessage(msg wirebase.Message, enc wirebase.MessageEncoding) 
 	}))
 	log.Tracef("%v", newLogClosure(func() string {
 		var buf bytes.Buffer
-		_, err := wirebase.WriteMessageWithEncodingN(&buf, msg,
-			p.ProtocolVersion(), p.cfg.NetMagic, enc)
+		_, err := wirebase.WriteMessage(&buf, msg,
+			p.ProtocolVersion(), p.cfg.NetMagic)
 		if err != nil {
 			return err.Error()
 		}
@@ -137,11 +139,28 @@ func (p *Peer) writeMessage(msg wirebase.Message, enc wirebase.MessageEncoding) 
 	}))
 
 	// Write the message to the peer.
-	n, err := wirebase.WriteMessageWithEncodingN(p.conn, msg,
-		p.ProtocolVersion(), p.cfg.NetMagic, enc)
+	n, err := wirebase.WriteMessage(p.iowriter, msg,
+		p.ProtocolVersion(), p.cfg.NetMagic)
 
 	if p.cfg.OnMessageHook.OnWrite != nil {
 		p.cfg.OnMessageHook.OnWrite(p, n, msg, err)
 	}
+	return err
+}
+
+// sends a payload to the peer.
+func (p *Peer) writePayload(cmd uint32, payload []byte) error {
+	// Don't do anything if we're disconnecting.
+	if atomic.LoadInt32(&p.connected) != 1 {
+		return nil
+	}
+
+	// Write the message to the peer.
+	payload := bw.Bytes()
+
+	cmd := msg.Command()
+	n, err := wirebase.WritePayload(p.iowriter, payload,
+		p.ProtocolVersion(), p.cfg.NetMagic)
+
 	return err
 }

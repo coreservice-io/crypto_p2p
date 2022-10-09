@@ -6,7 +6,6 @@ import (
 	"math/rand"
 
 	"github.com/coreservice-io/crypto_p2p/wire"
-	"github.com/coreservice-io/crypto_p2p/wire/wirebase"
 	"github.com/coreservice-io/crypto_p2p/wire/wmsg"
 )
 
@@ -15,7 +14,7 @@ import (
 // acceptable then return an error.
 func (p *Peer) readRemoteVersionMsg() error {
 	// Read their version message.
-	remoteMsg, _, err := p.readMessage(wirebase.LatestEncoding)
+	remoteMsg, _, err := p.readMessage()
 	if err != nil {
 		return err
 	}
@@ -25,7 +24,7 @@ func (p *Peer) readRemoteVersionMsg() error {
 	if !ok {
 		reason := "a version message must precede all others"
 		rejectMsg := wmsg.NewMsgReject(msg.Command(), wmsg.RejectMalformed, reason)
-		_ = p.writeMessage(rejectMsg, wirebase.LatestEncoding)
+		_ = p.writeMessage(rejectMsg)
 		return errors.New(reason)
 	}
 
@@ -44,7 +43,7 @@ func (p *Peer) readRemoteVersionMsg() error {
 		// obsolete and wait for the message to be sent before disconnecting.
 		reason := fmt.Sprintf("protocol version must be %d or greater", MinAcceptableProtocolVersion)
 		rejectMsg := wmsg.NewMsgReject(msg.Command(), wmsg.RejectObsolete, reason)
-		_ = p.writeMessage(rejectMsg, wirebase.LatestEncoding)
+		_ = p.writeMessage(rejectMsg)
 		return errors.New(reason)
 	}
 
@@ -90,14 +89,14 @@ func (p *Peer) writeLocalVersionMsg() error {
 		return err
 	}
 
-	return p.writeMessage(versionMsg, wirebase.LatestEncoding)
+	return p.writeMessage(versionMsg)
 }
 
 // writes our sendaddr message to the remote peer if the
 // peer supports protocol version 70016 and above.
 func (p *Peer) writeSendAddrMsg(pver uint32) error {
 	sendAddrMsg := wmsg.NewMsgSendAddr()
-	return p.writeMessage(sendAddrMsg, wirebase.LatestEncoding)
+	return p.writeMessage(sendAddrMsg)
 }
 
 // waits until desired negotiation messages are received,
@@ -111,7 +110,7 @@ func (p *Peer) waitToFinishNegotiation(pver uint32) error {
 	// can receive unknown messages before and after sendaddr and still
 	// have to wait for verack.
 	for {
-		remoteMsg, _, err := p.readMessage(wirebase.LatestEncoding)
+		remoteMsg, _, err := p.readMessage()
 		if err == wmsg.ErrUnknownMessage {
 			continue
 		} else if err != nil {
@@ -161,7 +160,7 @@ func (p *Peer) negotiateInboundProtocol() error {
 		return err
 	}
 
-	err := p.writeMessage(wmsg.NewMsgVerAck(), wirebase.LatestEncoding)
+	err := p.writeMessage(wmsg.NewMsgVerAck())
 	if err != nil {
 		return err
 	}
@@ -198,7 +197,7 @@ func (p *Peer) negotiateOutboundProtocol() error {
 		return err
 	}
 
-	err := p.writeMessage(wmsg.NewMsgVerAck(), wirebase.LatestEncoding)
+	err := p.writeMessage(wmsg.NewMsgVerAck())
 	if err != nil {
 		return err
 	}

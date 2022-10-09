@@ -6,8 +6,7 @@ import (
 	"github.com/coreservice-io/crypto_p2p/wire/wirebase"
 )
 
-// MsgPing implements the Message interface and represents a bitcoin ping
-// message.
+// MsgPing implements the Message interface and represents a ping message.
 //
 // it contains an identifier which can be
 // returned in the pong message to determine network timing.
@@ -40,19 +39,13 @@ func (msg *MsgPing) Encode(w io.Writer, pver uint32) error {
 
 // Command returns the protocol command string for the message.  This is part
 // of the Message interface implementation.
-func (msg *MsgPing) Command() string {
-	return CmdPing
+func (msg *MsgPing) Command() uint32 {
+	return CMD_PING
 }
 
-// MaxPayloadLength returns the maximum length the payload can be for the
-// receiver.  This is part of the Message interface implementation.
-func (msg *MsgPing) MaxPayloadLength(pver uint32) uint32 {
-	plen := uint32(8)
-	return plen
-}
-
-// NewMsgPing returns a new bitcoin ping message that conforms to the Message
-// interface.  See MsgPing for details.
+// NewMsgPing returns a new ping message that confirms to the Message
+// interface.
+// See MsgPing for details.
 func NewMsgPing(nonce uint64) *MsgPing {
 	return &MsgPing{
 		Nonce: nonce,

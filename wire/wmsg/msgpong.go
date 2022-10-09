@@ -6,9 +6,9 @@ import (
 	"github.com/coreservice-io/crypto_p2p/wire/wirebase"
 )
 
-// MsgPong implements the Message interface and represents a bitcoin pong
+// MsgPong implements the Message interface and represents a pong
 // message which is used primarily to confirm that a connection is still valid
-// in response to a bitcoin ping message (MsgPing).
+// in response to a ping message (MsgPing).
 //
 // This message was not added until protocol versions AFTER BIP0031Version.
 type MsgPong struct {
@@ -27,18 +27,11 @@ func (msg *MsgPong) Encode(w io.Writer, pver uint32) error {
 
 // Command returns the protocol command string for the message.  This is part
 // of the Message interface implementation.
-func (msg *MsgPong) Command() string {
-	return CmdPong
+func (msg *MsgPong) Command() uint32 {
+	return CMD_PONG
 }
 
-// MaxPayloadLength returns the maximum length the payload can be for the
-// receiver.  This is part of the Message interface implementation.
-func (msg *MsgPong) MaxPayloadLength(pver uint32) uint32 {
-	plen := uint32(8)
-	return plen
-}
-
-// NewMsgPong returns a new bitcoin pong message that conforms to the Message
+// NewMsgPong returns a new pong message that confirms to the Message
 // interface.  See MsgPong for details.
 func NewMsgPong(nonce uint64) *MsgPong {
 	return &MsgPong{
