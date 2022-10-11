@@ -10,6 +10,8 @@ import (
 	"github.com/coreservice-io/log"
 )
 
+const PEER_BOOST_TIMEOUT_SECS = 15
+
 type PeerMgr struct {
 	log           log.Logger
 	peer_version  uint32
@@ -103,34 +105,32 @@ func (peer_mgr *PeerMgr) SetupInboundPeer(conn net.Conn) error {
 	//handshake and further setup
 	go func() {
 
-		select {
-		case <-time.After(time.Duration(PEER_BOOST_TIMEOUT_SECS) * time.Second):
-			peer_mgr.RemovePeer(inbound_peer)
-
-		case <-inbound_peer.boosted:
-			peer_mgr.log.Infoln("inbound peer boosted,ipv4:", inbound_peer.addr.ipv4)
-		}
-
-		inbound_peer.RegRequestHandler(cmd.CMD_HANDSHAKE, func(req []byte) error {
-			cmd_resp := &cmd.CmdHandShake_RESP{}
-			err := cmd_resp.Decode(req)
-			if err != nil {
-				return err
+		inbound_peer.RegRequestHandler(cmd.CMD_HANDSHAKE, func(req []byte) []byte {
+			cmd_req := &cmd.CmdHandShake_REQ{}
+			err := cmd_req.Decode(req)
+			if err == nil || cmd_req.Net_magic == peer_mgr.net_magic {
+				inbound_peer.boosted <- struct{}{}
 			}
 
-			if cmd_resp.Net_magic != peer_mgr.net_magic {
-				inbound_peer.SendRequest()
-			} else {
-
-			}
-
-			return nil
+			return (&cmd.CmdHandShake_RESP{Net_magic: peer_mgr.net_magic}).Encode()
 		})
 
 		err := inbound_peer.Start()
 		if err != nil {
 			peer_mgr.log.Errorln(err)
 		}
+
+		select {
+		case <-time.After(time.Duration(PEER_BOOST_TIMEOUT_SECS) * time.Second):
+			peer_mgr.RemovePeer(inbound_peer)
+
+		case <-inbound_peer.boosted:
+			peer_mgr.log.Infoln("inbound peer boosted,ipv4:", inbound_peer.addr.ipv4)
+			//reg more functions
+			//reg ping/pong hearbeat
+			//........
+		}
+
 	}()
 
 	return nil

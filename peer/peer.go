@@ -13,7 +13,7 @@ import (
 )
 
 const DEFAULT_REQUEST_TIMEOUT_SECS = 60
-const PEER_BOOST_TIMEOUT_SECS = 15
+const REQUEST_TIMEOUT_SECS_MAX = 600 //request max timeout
 
 // ///////////////////////
 
@@ -101,39 +101,43 @@ func (peer *Peer) SendRequest(cmd uint32, content []byte) ([]byte, error) {
 
 func (peer *Peer) SendRequestTimeout(cmd uint32, content []byte, timeout_secs int) ([]byte, error) {
 
+	if timeout_secs <= 0 || timeout_secs > REQUEST_TIMEOUT_SECS_MAX {
+		return nil, errors.New("timeout_secs must within range (0, REQUEST_TIMEOUT_SECS_MAX] ")
+	}
+
+	start_unixtime := time.Now().Unix()
+
 	p_resp := &PeerResp{
 		Request_id: rand.Uint32(),
-		Done:       make(chan bool),
+		Done:       make(chan bool, 1),
 	}
 
 	peer.response_map[p_resp.Request_id] = p_resp
+	defer delete(peer.response_map, p_resp.Request_id)
 
-	//todo write msg to chunks to tcp-conn
+	err := msg.WriteMsgChunks(peer.conn, p_resp.Request_id, cmd, content, timeout_secs)
+	if err != nil {
+		return nil, err
+	}
 
-	peer.conn.Write()
-
-	var time_left_secs int
+	time_left_secs := int(start_unixtime - time.Now().Unix())
+	if time_left_secs <= 0 {
+		return nil, errors.New("timeout")
+	}
 
 	select {
 	case done := <-p_resp.Done:
 		if done {
-			return nil, errors.New("failed")
-		} else {
 			return p_resp.buffer.Body.Bytes(), nil
+		} else {
+			return nil, errors.New("failed")
 		}
 
 	case <-time.After(time.Duration(time_left_secs) * time.Second):
-		return nil, errors.New("PEER_MSG_READ_TIMEOUT_SECS")
+		return nil, errors.New("remote peer response timeout ")
 	}
 
-	delete(peer.response_map, p_resp.Request_id)
-
 }
-
-// ///////////////
-// func (peer *Peer) SendResponseTimeout() {
-
-// }
 
 // start the msg loop
 func (peer *Peer) Start() error {
@@ -193,7 +197,7 @@ func (peer *Peer) Start() error {
 				if finished {
 					result := handler(req.buffer.Body.Bytes())
 					delete(peer.request_map, chunk_msg.Header.Req_id)
-					//send result back
+					msg.WriteMsgChunks(peer.conn, req.Request_id, cmd.CMD_RESP, result, -1)
 
 				}
 
