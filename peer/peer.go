@@ -19,7 +19,7 @@ const PEER_BOOST_TIMEOUT_SECS = 15
 
 type PeerResp struct {
 	Request_id uint32
-	Done       chan struct{}
+	Done       chan bool
 	buffer     *msg.MsgBuffer
 }
 
@@ -61,14 +61,14 @@ type Peer struct {
 	request_map  map[uint32]*PeerReq
 	response_map map[uint32]*PeerResp
 
-	request_handlers map[uint32]func(resp []byte) ([]byte, error) //error happens only if caller put bad strange param , e.g error happens peer will break
+	request_handlers map[uint32]func(resp []byte) []byte //error happens only if caller put bad strange param , e.g error happens peer will break
 }
 
 func NewPeer() *Peer {
 	return &Peer{
 		request_map:      make(map[uint32]*PeerReq),
 		response_map:     make(map[uint32]*PeerResp),
-		request_handlers: make(map[uint32]func(resp []byte) ([]byte, error)),
+		request_handlers: make(map[uint32]func(resp []byte) []byte),
 	}
 }
 
@@ -85,7 +85,7 @@ func (peer *Peer) Close() {
 	peer.conn.Close()
 }
 
-func (peer *Peer) RegRequestHandler(cmd uint32, callback func(req []byte) ([]byte, error)) error {
+func (peer *Peer) RegRequestHandler(cmd uint32, callback func(req []byte) []byte) error {
 	if _, ok := peer.request_handlers[cmd]; ok {
 		return errors.New("cmd handler overlap")
 	} else {
@@ -95,27 +95,35 @@ func (peer *Peer) RegRequestHandler(cmd uint32, callback func(req []byte) ([]byt
 }
 
 // ///////////////
-func (peer *Peer) SendRequest(cmd uint32) ([]byte, error) {
-	return peer.SendRequestTimeout(cmd, DEFAULT_REQUEST_TIMEOUT_SECS)
+func (peer *Peer) SendRequest(cmd uint32, content []byte) ([]byte, error) {
+	return peer.SendRequestTimeout(cmd, content, DEFAULT_REQUEST_TIMEOUT_SECS)
 }
 
-func (peer *Peer) SendRequestTimeout(cmd uint32, timeout_secs int) ([]byte, error) {
+func (peer *Peer) SendRequestTimeout(cmd uint32, content []byte, timeout_secs int) ([]byte, error) {
 
 	p_resp := &PeerResp{
 		Request_id: rand.Uint32(),
-		Done:       make(chan struct{}),
+		Done:       make(chan bool),
 	}
 
 	peer.response_map[p_resp.Request_id] = p_resp
 
 	//todo write msg to chunks to tcp-conn
 
-	select {
-	case <-p_resp.Done:
-		callback(p_resp.buffer.Body.Bytes(), nil)
+	peer.conn.Write()
 
-	case <-time.After(time.Duration(timeout_secs) * time.Second):
-		callback(nil, errors.New("PEER_MSG_READ_TIMEOUT_SECS"))
+	var time_left_secs int
+
+	select {
+	case done := <-p_resp.Done:
+		if done {
+			return nil, errors.New("failed")
+		} else {
+			return p_resp.buffer.Body.Bytes(), nil
+		}
+
+	case <-time.After(time.Duration(time_left_secs) * time.Second):
+		return nil, errors.New("PEER_MSG_READ_TIMEOUT_SECS")
 	}
 
 	delete(peer.response_map, p_resp.Request_id)
@@ -144,18 +152,19 @@ func (peer *Peer) Start() error {
 
 				finished, err := resp.buffer.ConnectChunk(chunk_msg)
 				if err != nil {
-					//todo add credit system call as an error happend
-					//todo add credit penalty system call as this ip-peer is bad
-					return err
+					delete(peer.response_map, chunk_msg.Header.Req_id)
+					resp.Done <- false
 				}
 
 				if finished {
-					delete(peer.response_map, chunk_msg.Header.Req_id)
-					resp.Done <- struct{}{}
+					resp.Done <- true
 				}
 
 			} else {
-				return errors.New("response not match")
+				//either case may exist:
+				//1. request side timeout makes the response_map deleted
+				//2. the peer send trash message to us ,for this case todo: a credit penalty
+				continue
 			}
 
 		} else {
@@ -182,12 +191,9 @@ func (peer *Peer) Start() error {
 				}
 
 				if finished {
-					result, err := handler(req.buffer.Body.Bytes())
+					result := handler(req.buffer.Body.Bytes())
 					delete(peer.request_map, chunk_msg.Header.Req_id)
-
-					if err != nil {
-						return err
-					}
+					//send result back
 
 				}
 
