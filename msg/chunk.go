@@ -30,20 +30,16 @@ var chunk_body_pool = sync.Pool{
 
 // messageHeader defines the header structure for all protocol messages.
 type MsgChunkHeader struct {
-	cmd        uint32 // 4 bytes
-	req_id     uint32 // 4 bytes a unique random number which assigned by request side
-	body_len   uint32 // 4 bytes
-	chunk_size uint32 // 4 bytes
-	chunk_idx  uint32 // 4 bytes
+	Cmd        uint32 // 4 bytes
+	Req_id     uint32 // 4 bytes a unique random number which assigned by request side
+	Body_len   uint32 // 4 bytes
+	Chunk_size uint32 // 4 bytes
+	Chunk_idx  uint32 // 4 bytes
 }
 
 type MsgChunk struct {
-	header *MsgChunkHeader
+	Header *MsgChunkHeader
 	body   []byte
-}
-
-func (msg_chunk *MsgChunk) Cmd() uint32 {
-	return msg_chunk.header.cmd
 }
 
 func (msg_chunk *MsgChunk) Recycle() {
@@ -70,15 +66,15 @@ func ReadMsgChunk(reader io.Reader) (*MsgChunk, error) {
 		return nil, err
 	}
 
-	if header.chunk_idx > MSG_CHUNK_LIMIT {
+	if header.Chunk_idx > MSG_CHUNK_LIMIT {
 		return nil, errors.New("chunk_idx overlimit [MSG_CHUNK_LIMIT]")
 	}
 
-	msg_chunk.header = header
+	msg_chunk.Header = header
 	//read body
-	if msg_chunk.header.body_len > 0 {
+	if msg_chunk.Header.Body_len > 0 {
 		msg_chunk.body = chunk_body_pool.Get().([]byte)
-		_, err := io.ReadFull(reader, msg_chunk.body[:msg_chunk.header.body_len])
+		_, err := io.ReadFull(reader, msg_chunk.body[:msg_chunk.Header.Body_len])
 		if err != nil {
 			msg_chunk.Recycle()
 			return nil, err
@@ -94,11 +90,11 @@ func decodeMsgChunkHeader(header_bytes []byte) (*MsgChunkHeader, error) {
 	}
 
 	return &MsgChunkHeader{
-		cmd:        binary.LittleEndian.Uint32(header_bytes[0:4]),
-		req_id:     binary.LittleEndian.Uint32(header_bytes[4:8]),
-		body_len:   binary.LittleEndian.Uint32(header_bytes[8:12]),
-		chunk_size: binary.LittleEndian.Uint32(header_bytes[12:16]),
-		chunk_idx:  binary.LittleEndian.Uint32(header_bytes[16:20]),
+		Cmd:        binary.LittleEndian.Uint32(header_bytes[0:4]),
+		Req_id:     binary.LittleEndian.Uint32(header_bytes[4:8]),
+		Body_len:   binary.LittleEndian.Uint32(header_bytes[8:12]),
+		Chunk_size: binary.LittleEndian.Uint32(header_bytes[12:16]),
+		Chunk_idx:  binary.LittleEndian.Uint32(header_bytes[16:20]),
 	}, nil
 
 }

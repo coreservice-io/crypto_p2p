@@ -5,21 +5,30 @@ import (
 	"errors"
 )
 
-type MsgResp struct {
+type MsgBuffer struct {
 	connect_chunk_idx uint32
 	Body              bytes.Buffer
 }
 
-func (msg_resp *MsgResp) ConnectChunk(msg_chunk *MsgChunk) error {
+// return (finished , error happens)
+func (msg_buffer *MsgBuffer) ConnectChunk(msg_chunk *MsgChunk) (bool, error) {
 
-	if msg_resp.connect_chunk_idx != msg_chunk.header.chunk_idx {
-		return errors.New("ConnectChunk idx not match")
+	if msg_buffer.connect_chunk_idx != msg_chunk.Header.Chunk_idx {
+		return false, errors.New("ConnectChunk idx not match")
 	}
 
-	if msg_chunk.header.body_len > 0 {
-		_, err := msg_resp.Body.Write(msg_chunk.body)
-		return err
+	if msg_chunk.Header.Body_len > 0 {
+		_, err := msg_buffer.Body.Write(msg_chunk.body)
+		if err != nil {
+			return false, err
+		}
 	}
 
-	return nil
+	msg_buffer.connect_chunk_idx++
+
+	if msg_chunk.Header.Chunk_idx == msg_chunk.Header.Chunk_size-1 {
+		return true, nil
+	} else {
+		return false, nil
+	}
 }
