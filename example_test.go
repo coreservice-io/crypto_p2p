@@ -4,18 +4,17 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"testing"
 	"time"
 
 	"github.com/coreservice-io/crypto_p2p/peer"
-	"github.com/coreservice-io/crypto_p2p/wire/wirebase"
-	"github.com/coreservice-io/crypto_p2p/wire/wmsg"
 
 	"github.com/btcsuite/btclog"
 )
 
 const (
 	// represents the simulation test network.
-	SimNet wirebase.NetMagic = 0x12141c16
+	SimNet uint32 = 0x12141c16
 )
 
 func startServer(listenAddr string, cfg *peer.Config) error {
@@ -32,7 +31,7 @@ func startServer(listenAddr string, cfg *peer.Config) error {
 
 		// Create and start the inbound peer.
 		p := peer.NewInboundPeer(cfg)
-		p.AttachConnection(conn)
+		p.AttachConn(conn)
 	}()
 
 	return nil
@@ -51,7 +50,7 @@ func startClient(addr string, cfg *peer.Config) (*peer.Peer, error) {
 		fmt.Printf("net.Dial: error %v\n", err)
 		return nil, err
 	}
-	p.AttachConnection(conn)
+	p.AttachConn(conn)
 
 	return p, nil
 }
@@ -62,25 +61,7 @@ func startClient(addr string, cfg *peer.Config) (*peer.Peer, error) {
 func mockRemotePeer() error {
 	// Configure peer to act as a simnet node that offers no services.
 	peerCfg := &peer.Config{
-		NetMagic: SimNet,
-		OnMessageHook: peer.MessageWatcher{
-			OnRead: func(p *peer.Peer, bytesRead int, msg wirebase.Message, err error) {
-
-				fmt.Println("Remote OnRead: Occure")
-
-				if err != nil {
-					str := "Remote OnRead Meet Error at length: %d, detail: %v"
-					err := fmt.Errorf(str, bytesRead, err)
-					fmt.Println("", err)
-					return
-				}
-
-				if msg == nil {
-					fmt.Println("OnRead: msg nil")
-					return
-				}
-			},
-		},
+		NetMagic:       SimNet,
 		AllowSelfConns: true,
 	}
 
@@ -93,12 +74,7 @@ func mockRemotePeer() error {
 	return nil
 }
 
-// This example demonstrates the basic process for initializing and creating an
-// outbound peer.
-// Peers negotiate by exchanging version and verack messages.
-// For demonstration, a simple handler for version message is attached to the
-// peer.
-func Example_newOutboundPeer() {
+func Test_NewOutboundPeer(t *testing.T) {
 
 	backendLogger := btclog.NewBackend(os.Stdout)
 	defer os.Stdout.Sync()
@@ -123,31 +99,7 @@ func Example_newOutboundPeer() {
 	verack := make(chan uint32)
 
 	peerCfg := &peer.Config{
-		NetMagic: SimNet,
-		OnMessageHook: peer.MessageWatcher{
-			OnRead: func(p *peer.Peer, bytesRead int, msg wirebase.Message, err error) {
-
-				fmt.Println("Local OnRead: Occure")
-
-				if err != nil {
-					str := "Local OnRead Meet Error at length: %d, detail: %v"
-					err := fmt.Errorf(str, bytesRead, err)
-					fmt.Println("", err)
-					return
-				}
-
-				if msg == nil {
-					fmt.Println("OnRead: msg nil")
-					return
-				}
-
-				fmt.Println("outbound: ", msg.Command())
-
-				if msg.Command() == wmsg.CMD_VERACK {
-					verack <- msg.Command()
-				}
-			},
-		},
+		NetMagic:       SimNet,
 		AllowSelfConns: true,
 	}
 
@@ -164,10 +116,37 @@ func Example_newOutboundPeer() {
 		fmt.Printf("Example_peerConnection: verack timeout")
 	}
 
-	// Disconnect the peer.
-	p.Disconnect()
-	p.WaitForDisconnect()
+	p.Close()
+	p.WaitForClose()
 
 	// Output:
 	// outbound: received version
+}
+
+func Test_PeerMgr(t *testing.T) {
+
+	// llog, err := logrus_log.New("./logs", 1, 20, 30)
+	// if err != nil {
+	// 	panic(err.Error())
+	// }
+	listen := "127.0.0.1:18555"
+	seeds := "127.0.0.1:18555,127.0.0.1:9999"
+	peer_mgr, _ := peer.InitPeerMgr(1, SimNet, listen, seeds)
+
+	peer_mgr.Start()
+
+	fmt.Printf("%v\n", peer_mgr.Seeds())
+
+	// inbound_peer.RegRequestHandler(cmd.CMD_HANDSHAKE, func(req []byte) []byte {
+	// 	cmd_req := &cmd.CmdHandShake_REQ{}
+	// 	err := cmd_req.Decode(req)
+	// 	if err == nil || cmd_req.Net_magic == peer_mgr.net_magic {
+	// 		inbound_peer.boosted <- struct{}{}
+	// 	}
+
+	// 	return (&cmd.CmdHandShake_RESP{Net_magic: peer_mgr.net_magic}).Encode()
+	// })
+
+	// Output:
+	// outbound: received Seeds
 }

@@ -1,4 +1,4 @@
-package wmsg
+package msg
 
 import (
 	"io"

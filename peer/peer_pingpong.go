@@ -3,21 +3,18 @@ package peer
 import (
 	"time"
 
+	"github.com/coreservice-io/crypto_p2p/wire/msg"
 	"github.com/coreservice-io/crypto_p2p/wire/wirebase"
-	"github.com/coreservice-io/crypto_p2p/wire/wmsg"
 )
 
 const (
-	// is the interval of time to wait in between sending ping messages.
 	pingInterval = 2 * time.Minute
 )
 
-// periodically pings the peer.
-// It must be run as a goroutine.
 func (p *Peer) pingHandler() {
 
-	GetPeerManager().RegHandler(wmsg.CMD_PING, handlePingMsg)
-	GetPeerManager().RegHandler(wmsg.CMD_PONG, handlePongMsg)
+	p.peer_mgr.RegHandler(msg.CMD_PING, handlePingMsg)
+	p.peer_mgr.RegHandler(msg.CMD_PONG, handlePongMsg)
 
 	pingTicker := time.NewTicker(pingInterval)
 	defer pingTicker.Stop()
@@ -37,7 +34,7 @@ out:
 			p.lastPingTime = time.Now()
 			p.statsMtx.Unlock()
 
-			p.QueueMessage(wmsg.NewMsgPing(nonce), nil)
+			p.QueueMessage(msg.NewMsgPing(nonce), nil)
 
 		case <-p.quit:
 			break out
@@ -45,21 +42,17 @@ out:
 	}
 }
 
-// invoked when a peer receives a ping message, it replies with a pong message.
-func handlePingMsg(m wirebase.Message, p *Peer) error {
+func handlePingMsg(m msg.Message, p *Peer) error {
 
-	msg := m.(*wmsg.MsgPing)
-	// Include nonce from ping so pong can be identified.
-	p.QueueMessage(wmsg.NewMsgPong(msg.Nonce), nil)
+	message := m.(*msg.MsgPing)
+	p.QueueMessage(msg.NewMsgPong(message.Nonce), nil)
 
 	return nil
 }
 
-// invoked when a peer receives a pong message.
-// It updates the ping statistics as required for recent clients.
-func handlePongMsg(m wirebase.Message, p *Peer) error {
+func handlePongMsg(m msg.Message, p *Peer) error {
 
-	msg := m.(*wmsg.MsgPong)
+	message := m.(*msg.MsgPong)
 
 	// Arguably we could use a buffered channel here sending data
 	// in a fifo manner whenever we send a ping, or a list keeping track of
@@ -69,7 +62,7 @@ func handlePongMsg(m wirebase.Message, p *Peer) error {
 	// without large usage of the ping rpc call since we ping infrequently
 	// enough that if they overlap we would have timed out the peer.
 	p.statsMtx.Lock()
-	if p.lastPingNonce != 0 && msg.Nonce == p.lastPingNonce {
+	if p.lastPingNonce != 0 && message.Nonce == p.lastPingNonce {
 		p.lastPingMicros = time.Since(p.lastPingTime).Nanoseconds()
 		p.lastPingMicros /= 1000 // convert to usec.
 		p.lastPingNonce = 0

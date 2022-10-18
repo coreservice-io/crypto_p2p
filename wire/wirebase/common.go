@@ -523,9 +523,9 @@ func ReadVarString(r io.Reader, pver uint32) (string, error) {
 	// Prevent variable length strings that are larger than the maximum
 	// message size.  It would be possible to cause memory exhaustion and
 	// panics without a sane upper bound on this count.
-	if count > MSG_MAX_PAYLOAD_SIZE {
+	if count > MSG_PAYLOAD_MAX_SIZE {
 		str := fmt.Sprintf("variable length string is too long "+
-			"[count %d, max %d]", count, MSG_MAX_PAYLOAD_SIZE)
+			"[count %d, max %d]", count, MSG_PAYLOAD_MAX_SIZE)
 		return "", NewMessageError("ReadVarString", str)
 	}
 

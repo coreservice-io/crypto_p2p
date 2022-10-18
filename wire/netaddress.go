@@ -5,8 +5,55 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 	"time"
 )
+
+type PeerAddr struct {
+	host string
+	port uint16
+}
+
+func (pa *PeerAddr) String() string {
+	return fmt.Sprintf("%s:%d", pa.host, pa.port)
+}
+
+func ParsePeerAddr(addrs string) ([]PeerAddr, error) {
+
+	addr_array := strings.Split(addrs, ",")
+
+	res := make([]PeerAddr, len(addr_array))
+	for _, addr := range addr_array {
+
+		peerAddr, err := NewPeerAddr(addr)
+		if err != nil {
+			return nil, err
+		}
+
+		res = append(res, *peerAddr)
+		return res, nil
+
+	}
+
+	return res, nil
+}
+
+func NewPeerAddr(addr string) (*PeerAddr, error) {
+
+	host, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	port, err := strconv.ParseUint(portStr, 10, 16)
+	if err != nil {
+		return nil, err
+	}
+
+	return &PeerAddr{
+		host: host,
+		port: uint16(port),
+	}, nil
+}
 
 // defines information about a peer on the network including the
 // last time it was seen, the services it supports, its address, and port.
@@ -30,16 +77,10 @@ type NetAddress struct {
 	Port uint16
 }
 
-// String returns the peer's address and directionality as a human-readable
-// string.
-//
-// This function is safe for concurrent access.
 func (na *NetAddress) String() string {
 	return fmt.Sprintf("%s", na.Addr.String())
 }
 
-// attempts to extract the IP address and port from the passed net.Addr interface
-// and create a NetAddress structure using that information.
 func NewNetAddress(addr net.Addr) (*NetAddress, error) {
 	if tcpAddr, ok := addr.(*net.TCPAddr); ok {
 		ip := tcpAddr.IP
@@ -48,9 +89,6 @@ func NewNetAddress(addr net.Addr) (*NetAddress, error) {
 		return na, nil
 	}
 
-	// For the most part, addr should be one of the two above cases,
-	// but to be safe, fall back to trying to parse the information from the
-	// address string as a last resort.
 	host, portStr, err := net.SplitHostPort(addr.String())
 	if err != nil {
 		return nil, err
@@ -65,8 +103,6 @@ func NewNetAddress(addr net.Addr) (*NetAddress, error) {
 	return na, nil
 }
 
-// returns a new NetAddress using the provided IP, port
-// with defaults for the remaining fields.
 func NewNetAddressIPPort(ip net.IP, port uint16) *NetAddress {
 
 	timestamp := time.Now()

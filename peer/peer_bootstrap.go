@@ -4,113 +4,68 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"time"
 
-	"github.com/coreservice-io/crypto_p2p/wire"
+	"github.com/coreservice-io/crypto_p2p/wire/msg"
 	"github.com/coreservice-io/crypto_p2p/wire/wmsg"
 )
 
-// waits for the next message to arrive from the remote peer.
-// If the next message is not a version message or the version is not
-// acceptable then return an error.
-func (p *Peer) readRemoteVersionMsg() error {
-	// Read their version message.
-	remoteMsg, _, err := p.readMessage()
+func (p *Peer) readRemoteVersionMsg(magic uint32) error {
+	remoteMsg, err := p.readMessage()
 	if err != nil {
 		return err
 	}
 
-	// Notify and disconnect clients if the first message is not a version message.
-	msg, ok := remoteMsg.(*wmsg.MsgVersion)
+	message, ok := remoteMsg.(*msg.MsgVersion)
 	if !ok {
-		reason := "a version message must precede all others"
-		rejectMsg := wmsg.NewMsgReject(msg.Command(), wmsg.RejectMalformed, reason)
-		_ = p.writeMessage(rejectMsg)
-		return errors.New(reason)
+		return errors.New("Negotiated error: " +
+			"a version message must precede all others")
+	}
+
+	if message.Magic != uint32(magic) {
+		return errors.New("Negotiated error: " +
+			fmt.Sprintf("message from other network [%v]", message.Magic))
 	}
 
 	// Detect self connections.
-	if !p.cfg.AllowSelfConns && sentNonces.Contains(msg.Nonce) {
-		return errors.New("disconnecting peer connected to self")
+	if !p.allowSelfConns && sentNonces.Contains(message.Nonce) {
+		return errors.New("Negotiated error: " +
+			"disconnecting peer connected to self")
 	}
 
 	// Negotiate the protocol version and set the services to what the remote peer advertised.
-	p.protocolVersion = minUint32(p.protocolVersion, uint32(msg.ProtocolVersion))
+	p.protocolVersion = minUint32(p.protocolVersion, uint32(message.ProtocolVersion))
 	log.Debugf("Negotiated protocol version %d for peer %s", p.protocolVersion, p)
 
-	// Notify and disconnect clients that have a protocol version that is too old.
-	if uint32(msg.ProtocolVersion) < MinAcceptableProtocolVersion {
-		// Send a reject message indicating the protocol version is
-		// obsolete and wait for the message to be sent before disconnecting.
-		reason := fmt.Sprintf("protocol version must be %d or greater", MinAcceptableProtocolVersion)
-		rejectMsg := wmsg.NewMsgReject(msg.Command(), wmsg.RejectObsolete, reason)
-		_ = p.writeMessage(rejectMsg)
-		return errors.New(reason)
+	if uint32(message.ProtocolVersion) < MinAcceptVersion {
+		reason := fmt.Sprintf("protocol version must be %d or greater", MinAcceptVersion)
+		// rejectMsg := msg.NewMsgReject(message.Command(), wmsg.RejectObsolete, reason)
+		// _ = p.writeMessage(rejectMsg)
+		return errors.New("Negotiated error: " +
+			reason)
 	}
 
 	return nil
 }
 
-// processRemoteVerAckMsg takes the verack from the remote peer and handles it.
 func (p *Peer) processRemoteVerAckMsg(msg *wmsg.MsgVerAck) {
 
 }
 
-// creates a version message that can be used to send to the remote peer.
-func (p *Peer) localVersionMsg() (*wmsg.MsgVersion, error) {
+func (p *Peer) writeLocalVersionMsg(magic uint32) error {
 
-	theirNA := p.na
-
-	// Create a wire.NetAddress to use as the
-	// "addrme" in the version message.
-	//
-	// Older nodes previously added the IP and port information to the
-	// address manager which proved to be unreliable as an inbound
-	// connection from a peer didn't necessarily mean the peer itself
-	// accepted inbound connections.
-	//
-	// Also, the timestamp is unused in the version message.
-	ourNA := &wire.NetAddress{}
-
-	// Generate a unique nonce for this peer so self connections can be detected.
-	// This is accomplished by adding it to a size-limited map of recently seen nonces.
 	nonce := uint64(rand.Int63())
 	sentNonces.Add(nonce)
 
-	// Version message.
-	msg := wmsg.NewMsgVersion(ourNA.ToBytes(), theirNA.ToBytes(), nonce, p.cfg.ProtocolVersion)
+	versionMsg := msg.NewMsgVersion(magic, uint32(p.na.Port), nonce, p.cfg.ProtocolVersion)
 
-	return msg, nil
+	return p.writeMessage(versionMsg, 8)
 }
 
-// writes our version message to the remote peer.
-func (p *Peer) writeLocalVersionMsg() error {
-	versionMsg, err := p.localVersionMsg()
-	if err != nil {
-		return err
-	}
+func (p *Peer) waitToFinishHandShake() error {
 
-	return p.writeMessage(versionMsg)
-}
-
-// writes our sendaddr message to the remote peer if the
-// peer supports protocol version 70016 and above.
-func (p *Peer) writeSendAddrMsg(pver uint32) error {
-	sendAddrMsg := wmsg.NewMsgSendAddr()
-	return p.writeMessage(sendAddrMsg)
-}
-
-// waits until desired negotiation messages are received,
-// recording the remote peer's preference for sendaddr as an example.
-// The list of negotiated features can be expanded in the future. If a
-// verack is received, negotiation stops and the connection is live.
-func (p *Peer) waitToFinishNegotiation(pver uint32) error {
-	// There are several possible messages that can be received here.
-	// We could immediately receive verack and be done with the handshake.
-	// We could receive sendaddr and still have to wait for verack. Or we
-	// can receive unknown messages before and after sendaddr and still
-	// have to wait for verack.
 	for {
-		remoteMsg, _, err := p.readMessage()
+		remoteMsg, err := p.readMessage()
 		if err == wmsg.ErrUnknownMessage {
 			continue
 		} else if err != nil {
@@ -118,45 +73,26 @@ func (p *Peer) waitToFinishNegotiation(pver uint32) error {
 		}
 
 		switch m := remoteMsg.(type) {
-		case *wmsg.MsgSendAddr:
-			return nil
-		case *wmsg.MsgVerAck:
+		case *msg.MsgVerAck:
 			// Receiving a verack means we are done with the handshake.
 			p.processRemoteVerAckMsg(m)
 			return nil
 		default:
-			// This is triggered if the peer sends, for example, a
-			// GETDATA message during this negotiation.
-			return wmsg.ErrInvalidHandshake
+			return fmt.Errorf("invalid message during handshake")
 		}
 	}
 }
 
-// performs the negotiation protocol for an inbound peer.
-// The events should occur in the following order, otherwise an error is returned:
-//
-//   1. Remote peer sends their version.
-//   2. We send our version.
-//   3. We send sendaddrv.
-//   4. We send our verack.
-//   5. Wait until sendaddrv or verack is received. Unknown messages are
-//      skipped as it could be wtxidrelay or a different message in the future
-//   6. If remote peer sent sendaddr above, wait until receipt of verack.
-func (p *Peer) negotiateInboundProtocol() error {
-	if err := p.readRemoteVersionMsg(); err != nil {
+func (p *Peer) handshakeIn(magic uint32) error {
+	if err := p.readRemoteVersionMsg(magic); err != nil {
 		return err
 	}
 
-	if err := p.writeLocalVersionMsg(); err != nil {
+	if err := p.writeLocalVersionMsg(magic); err != nil {
 		return err
 	}
 
-	var protoVersion uint32
-	p.flagsMtx.Lock()
-	protoVersion = p.protocolVersion
-	p.flagsMtx.Unlock()
-
-	if err := p.writeSendAddrMsg(protoVersion); err != nil {
+	if err := p.writeMessage(wmsg.NewMsgSendAddr()); err != nil {
 		return err
 	}
 
@@ -165,35 +101,19 @@ func (p *Peer) negotiateInboundProtocol() error {
 		return err
 	}
 
-	// Finish the negotiation by waiting for negotiable messages or verack.
-	return p.waitToFinishNegotiation(protoVersion)
+	return p.waitToFinishHandShake()
 }
 
-// performs the negotiation protocol for an outbound peer.
-// The events should occur in the following order, otherwise an error is returned:
-//
-//   1. We send our version.
-//   2. Remote peer sends their version.
-//   3. We send sendaddrv2.
-//   4. We send our verack.
-//   5. We wait to receive sendaddrv2 or verack, skipping unknown messages as
-//      in the inbound case.
-//   6. If sendaddr was received, wait for receipt of verack.
-func (p *Peer) negotiateOutboundProtocol() error {
-	if err := p.writeLocalVersionMsg(); err != nil {
+func (p *Peer) handshakeOut(magic uint32) error {
+	if err := p.writeLocalVersionMsg(magic); err != nil {
 		return err
 	}
 
-	if err := p.readRemoteVersionMsg(); err != nil {
+	if err := p.readRemoteVersionMsg(magic); err != nil {
 		return err
 	}
 
-	var protoVersion uint32
-	p.flagsMtx.Lock()
-	protoVersion = p.protocolVersion
-	p.flagsMtx.Unlock()
-
-	if err := p.writeSendAddrMsg(protoVersion); err != nil {
+	if err := p.writeMessage(wmsg.NewMsgSendAddr()); err != nil {
 		return err
 	}
 
@@ -202,6 +122,29 @@ func (p *Peer) negotiateOutboundProtocol() error {
 		return err
 	}
 
-	// Finish the negotiation by waiting for negotiable messages or verack.
-	return p.waitToFinishNegotiation(protoVersion)
+	return p.waitToFinishHandShake()
+}
+
+func (p *Peer) handshake() error {
+	hsErr := make(chan error, 1)
+	go func() {
+		if p.inbound {
+			hsErr <- p.handshakeIn()
+		} else {
+			hsErr <- p.handshakeOut()
+		}
+	}()
+
+	select {
+	case err := <-hsErr:
+		if err != nil {
+			p.Close()
+			return err
+		}
+	case <-time.After(PEER_HAND_SHAKE_TIMEOUT):
+		p.Close()
+		return errors.New("protocol hand shake timeout")
+	}
+
+	return nil
 }

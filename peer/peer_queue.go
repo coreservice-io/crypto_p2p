@@ -2,15 +2,13 @@ package peer
 
 import (
 	"container/list"
-	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net"
-	"strconv"
 	"sync/atomic"
 	"time"
 
+	"github.com/coreservice-io/crypto_p2p/wire/msg"
 	"github.com/coreservice-io/crypto_p2p/wire/wirebase"
 	"github.com/coreservice-io/crypto_p2p/wire/wmsg"
 )
@@ -68,17 +66,12 @@ func (p *Peer) PushRejectMsg(command uint32, code wmsg.RejectCode, reason string
 	<-doneChan
 }
 
-// isAllowedReadError returns whether or not the passed error is allowed without
-// disconnecting the peer.  In particular, regression tests need to be allowed
-// to send malformed messages without the peer being disconnected.
 func (p *Peer) isAllowedReadError(err error) bool {
 	// Don't allow the error if it's not specifically a malformed message error.
 	if _, ok := err.(*wirebase.MessageError); !ok {
 		return false
 	}
 
-	// Don't allow the error if it's not coming from localhost or the
-	// hostname can't be determined for some reason.
 	host, _, err := net.SplitHostPort(p.literalAddr)
 	if err != nil {
 		return false
@@ -88,21 +81,14 @@ func (p *Peer) isAllowedReadError(err error) bool {
 		return false
 	}
 
-	// Allowed if all checks passed.
 	return true
 }
 
-// shouldHandleReadError returns whether or not the passed error, which is
-// expected to have come from reading from the remote peer in the inHandler,
-// should be logged and responded to with a reject message.
 func (p *Peer) shouldHandleReadError(err error) bool {
-	// No logging or reject message when the peer is being forcibly disconnected.
 	if atomic.LoadInt32(&p.connected) != 1 {
 		return false
 	}
 
-	// No logging or reject message when the remote peer has been
-	// disconnected.
 	if err == io.EOF {
 		return false
 	}
@@ -125,9 +111,9 @@ func (p *Peer) maybeAddDeadline(pendingResponses map[uint32]time.Time, msgCmd ui
 	// response won't be received in time.
 	deadline := time.Now().Add(stallResponseTimeout)
 	switch msgCmd {
-	case wmsg.CMD_VERSION:
+	case msg.CMD_VERSION:
 		// Expects a verack message.
-		pendingResponses[wmsg.CMD_VERACK] = deadline
+		pendingResponses[msg.CMD_VERACK] = deadline
 	}
 }
 
@@ -213,8 +199,6 @@ out:
 				offset += now.Sub(handlersStartTime)
 			}
 
-			// Disconnect the peer if any of the pending responses
-			// don't arrive by their adjusted deadline.
 			for command, deadline := range pendingResponses {
 				if now.Before(deadline.Add(offset)) {
 					continue
@@ -222,7 +206,7 @@ out:
 
 				log.Debugf("Peer %s appears to be stalled or misbehaving, %s timeout -- disconnecting",
 					p, command)
-				p.Disconnect()
+				p.Close()
 				break
 			}
 
@@ -260,62 +244,38 @@ cleanup:
 	log.Tracef("Peer stall handler done for %s", p)
 }
 
-// handles all incoming messages for the peer.
-// It must be run as a goroutine.
 func (p *Peer) inHandler() {
-	// The timer is stopped when a new message is received and reset after it
-	// is processed.
 	idleTimer := time.AfterFunc(idleTimeout, func() {
 		log.Warnf("Peer %s no answer for %s -- disconnecting", p, idleTimeout)
-		p.Disconnect()
+		p.Close()
 	})
 
-	// read message in loop
+	// message loop
 out:
 	for atomic.LoadInt32(&p.connected) != 1 {
-		// Read a message and stop the idle timer as soon as the read is done.
-		// The timer is reset below for the next iteration if needed.
-		//
-		// block IO here
-		rmsg, _, err := p.readMessage()
+
+		rmsg, err := p.readMessage()
 		idleTimer.Stop()
 		if err != nil {
-			// In order to allow regression tests with malformed messages,
-			// don't disconnect the peer when we're in regression test mode
-			// and the error is one of the allowed errors.
 			if p.isAllowedReadError(err) {
 				log.Errorf("Allowed test error from %s: %v", p, err)
 				idleTimer.Reset(idleTimeout)
 				continue
 			}
 
-			// we have to ignore unknown messages after the version-verack handshake.
-			// This matches behavior and is necessary since
-			// compact blocks negotiation occurs after the handshake.
 			if err == wmsg.ErrUnknownMessage {
 				log.Debugf("Received unknown message from %s: %v", p, err)
 				idleTimer.Reset(idleTimeout)
 				continue
 			}
 
-			// Only log the error and send reject message if the
-			// local peer is not forcibly disconnecting and the
-			// remote peer has not disconnected.
 			if p.shouldHandleReadError(err) {
 				errMsg := fmt.Sprintf("Can't read message from %s: %v", p, err)
 				if err != io.ErrUnexpectedEOF {
 					log.Errorf(errMsg)
 				}
 
-				// Push a reject message for the malformed message and wait for
-				// the message to be sent before disconnecting.
-				//
-				// NOTE:
-				// Ideally this would include the command in the header if
-				// at least that much of the message was valid, but that is not
-				// currently exposed by wire, so just used malformed for the
-				// command.
-				p.PushRejectMsg(wmsg.CMD_REJECT, wmsg.RejectMalformed, errMsg, true)
+				// p.PushRejectMsg(msg.CMD_REJECT, wmsg.RejectMalformed, errMsg, true)
 			}
 			break out
 		}
@@ -323,29 +283,25 @@ out:
 
 		// Handle each supported message type.
 		p.stallControl <- stallControlMsg{sccHandlerStart, rmsg}
-		switch msg := rmsg.(type) {
-		case *wmsg.MsgVersion:
+		switch message := rmsg.(type) {
+		case *msg.MsgVersion:
 			// Limit to one version message per peer.
-			p.PushRejectMsg(msg.Command(), wmsg.RejectDuplicate,
-				"duplicate version message", true)
+			// p.PushRejectMsg(message.Command(), msg.RejectDuplicate,
+			// 	"duplicate version message", true)
 			break out
 
-		case *wmsg.MsgVerAck:
+		case *msg.MsgVerAck:
 			// Limit to one verack message per peer.
-			p.PushRejectMsg(
-				msg.Command(), wmsg.RejectDuplicate,
-				"duplicate verack message", true,
-			)
+			// p.PushRejectMsg(
+			// 	message.Command(), msg.RejectDuplicate,
+			// 	"duplicate verack message", true,
+			// )
 			break out
 
-		case *wmsg.MsgSendAddr:
-			// Disconnect if peer sends this after the handshake is completed
-			break out
-
-		case *wmsg.MsgReject:
+		case *msg.MsgReject:
 
 		default:
-			if handler := GetPeerManager().GetHandler(rmsg.Command()); handler != nil {
+			if handler := p.peer_mgr.GetHandler(rmsg.Command()); handler != nil {
 				handler(rmsg, p)
 			} else {
 				log.Debugf("Received unhandled message of type %v from %v",
@@ -362,7 +318,7 @@ out:
 	idleTimer.Stop()
 
 	// Ensure connection is closed.
-	p.Disconnect()
+	p.Close()
 
 	close(p.inQuit)
 	log.Tracef("Peer input handler done for %s", p)
@@ -476,7 +432,7 @@ out:
 
 			err := p.writeMessage(omsg.msg)
 			if err != nil {
-				p.Disconnect()
+				p.Close()
 				if p.shouldLogWriteError(err) {
 					log.Errorf("Failed to send message to %s: %v", p, err)
 				}
@@ -536,63 +492,5 @@ func (p *Peer) QueueMessage(msg wirebase.Message, doneChan chan<- struct{}) {
 		return
 	}
 
-	content_len := len(content)
-
 	p.outputQueue <- outMsg{msg: msg, doneChan: doneChan}
-}
-
-func (p *Peer) send_msg(p_msg *wmsg.MsgData, content []byte) error {
-
-	msg_id := p_msg.Id
-	msg_cmd := p_msg.Msg_cmd
-
-	content_len := len(content)
-
-	// chunks >=1
-	chunks := int(math.Ceil(float64(content_len) / wirebase.MSG_PAYLOAD_MAX_LEN))
-	if chunks == 0 {
-		chunks = 1
-	}
-
-	if chunks > wirebase.MSG_DATA_CHUNKS_NUM {
-		return errors.New("send_msg chunks exceed limit, chunks: " + strconv.Itoa(chunks))
-	}
-
-	for i := 0; i < chunks; i++ {
-
-		var msg_cmd_ uint32 = 0
-		var msg_eof_ uint8 = 0
-
-		if i == 0 {
-			msg_cmd_ = msg_cmd
-		}
-
-		if i == chunks-1 {
-			msg_eof_ = 1
-		}
-
-		start := i * wirebase.MSG_PAYLOAD_MAX_LEN
-		end := (i + 1) * wirebase.MSG_PAYLOAD_MAX_LEN
-
-		if end >= content_len {
-			end = content_len
-		}
-
-		payload := msg.Encode_msg(&wmsg.MsgHeader{
-			Cmd:          msg_cmd_,
-			EOF:          msg_eof_,
-			Id:           msg_id,
-			Payload_size: uint32(end - start),
-		}, content[start:end])
-
-		timeout := time.Now().Add(PEER_MSG_WRITE_TIMEOUT_SECS * time.Second)
-
-		_, err := p.iowriter.Write(payload, timeout)
-
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
 }
