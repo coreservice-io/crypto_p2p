@@ -7,9 +7,7 @@ import (
 	"github.com/coreservice-io/crypto_p2p/wire/wirebase"
 )
 
-const (
-	pingInterval = 2 * time.Minute
-)
+const pingInterval = 1 * time.Minute
 
 func (p *Peer) pingHandler() {
 
@@ -25,7 +23,7 @@ out:
 		case <-pingTicker.C:
 			nonce, err := wirebase.RandomUint64()
 			if err != nil {
-				log.Errorf("Not sending ping to %s: %v", p, err)
+				log.Errorln("Not sending ping to %s: %v", p, err)
 				continue
 			}
 
@@ -54,13 +52,6 @@ func handlePongMsg(m msg.Message, p *Peer) error {
 
 	message := m.(*msg.MsgPong)
 
-	// Arguably we could use a buffered channel here sending data
-	// in a fifo manner whenever we send a ping, or a list keeping track of
-	// the times of each ping. For now we just make a best effort and
-	// only record stats if it was for the last ping sent.
-	// Any preceding and overlapping pings will be ignored. It is unlikely to occur
-	// without large usage of the ping rpc call since we ping infrequently
-	// enough that if they overlap we would have timed out the peer.
 	p.statsMtx.Lock()
 	if p.lastPingNonce != 0 && message.Nonce == p.lastPingNonce {
 		p.lastPingMicros = time.Since(p.lastPingTime).Nanoseconds()
@@ -68,6 +59,46 @@ func handlePongMsg(m msg.Message, p *Peer) error {
 		p.lastPingNonce = 0
 	}
 	p.statsMtx.Unlock()
+
+	return nil
+}
+
+func (p *Peer) pingHandler2() {
+
+	p.peer_mgr.RegHandler(msg.CMD_PING, handlePingMsg2)
+
+	pingTicker := time.NewTicker(pingInterval)
+	defer pingTicker.Stop()
+
+out:
+	for {
+		select {
+		case <-pingTicker.C:
+			nonce, err := wirebase.RandomUint64()
+			if err != nil {
+				log.Errorln("Not sending ping to %s: %v", p, err)
+				continue
+			}
+
+			p.SendWithTimeout(msg.CMD_PING, nonce.bytes, 8)
+			if err != nil {
+				log.Errorln("Not sending ping to %s: %v", p, err)
+				continue
+			}
+
+		case <-p.quit:
+			break out
+		}
+	}
+}
+
+func handlePingMsg2(m msg.Message, p *Peer) error {
+
+	message := m.(*msg.MsgPing)
+
+	p.writeMessage(omsg.msg)
+
+	p.QueueMessageResp(msg.NewMsgPong(message.Nonce), nil)
 
 	return nil
 }

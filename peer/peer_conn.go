@@ -42,7 +42,7 @@ func (p *Peer) AttachConn(conn net.Conn) error {
 
 func (p *Peer) Close() {
 	if atomic.CompareAndSwapInt32(&p.connected, 1, 0) {
-		log.Debugf("Disconnecting %s", p)
+		log.Debugln("Disconnecting %s", p)
 		p.conn.Close()
 	}
 
@@ -62,12 +62,12 @@ func (p *Peer) readMsgBytes() (uint32, []byte, error) {
 	return (*hdr).Cmd(), msg_payload, err
 }
 
-func (p *Peer) writeMsgBytes(cmd uint32, data []byte, timeout_secs int) error {
+func (p *Peer) writeMsgBytes(cmd uint32, data []byte) error {
 	if atomic.LoadInt32(&p.connected) != 1 {
 		return nil
 	}
 
-	_, err := wirebase.WriteMessage(p.conn, cmd, data, timeout_secs)
+	_, err := wirebase.WriteMessage(p.conn, cmd, data)
 
 	return err
 }
@@ -82,9 +82,8 @@ func (p *Peer) readMessage() (msg.Message, error) {
 	if err != nil {
 		return message, err
 	}
-	// Decode message.
-	pr := bytes.NewBuffer(msg_payload)
 
+	pr := bytes.NewBuffer(msg_payload)
 	pver := p.ProtocolVersion()
 	err = message.Decode(pr, pver)
 	if err != nil {
@@ -94,7 +93,7 @@ func (p *Peer) readMessage() (msg.Message, error) {
 	return message, nil
 }
 
-func (p *Peer) writeMessage(message msg.Message, timeout_secs int) error {
+func (p *Peer) writeMessage(message msg.Message) error {
 	if atomic.LoadInt32(&p.connected) != 1 {
 		return nil
 	}
@@ -108,7 +107,7 @@ func (p *Peer) writeMessage(message msg.Message, timeout_secs int) error {
 	}
 	payload := bw.Bytes()
 
-	_, err = wirebase.WriteMessage(p.conn, message.Command(), payload, timeout_secs)
+	_, err = wirebase.WriteMessage(p.conn, message.Command(), payload)
 
 	return err
 }

@@ -40,17 +40,10 @@ func (code RejectCode) String() string {
 
 // MsgReject implements the Message interface and represents a reject message.
 type MsgReject struct {
-	// Cmd is the command for the message which was rejected such as
-	// as CmdBlock or CmdTx.  This can be obtained from the Command function
-	// of a Message.
 	Cmd uint32
 
-	// is a code indicating why the command was rejected.  It
-	// is encoded as a uint8 on the wire.
 	Code RejectCode
 
-	// Reason is a human-readable string with specific details (over and
-	// above the reject code) about why the command was rejected.
 	Reason string
 }
 

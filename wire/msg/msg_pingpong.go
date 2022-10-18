@@ -54,8 +54,6 @@ func (msg *MsgPong) Decode(r io.Reader, pver uint32) error {
 	return wirebase.ReadElement(r, &msg.Nonce)
 }
 
-// NewMsgPong returns a new pong message that confirms to the Message
-// interface.  See MsgPong for details.
 func NewMsgPong(nonce uint64) *MsgPong {
 	return &MsgPong{
 		Nonce: nonce,

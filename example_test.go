@@ -3,13 +3,10 @@ package peer_test
 import (
 	"fmt"
 	"net"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/coreservice-io/crypto_p2p/peer"
-
-	"github.com/btcsuite/btclog"
 )
 
 const (
@@ -75,12 +72,6 @@ func mockRemotePeer() error {
 }
 
 func Test_NewOutboundPeer(t *testing.T) {
-
-	backendLogger := btclog.NewBackend(os.Stdout)
-	defer os.Stdout.Sync()
-	peerLog := backendLogger.Logger("PEER")
-	peerLog.SetLevel(btclog.LevelDebug)
-	peer.UseLogger(peerLog)
 
 	// Ordinarily this will not be needed since the outbound peer will be
 	// connecting to a remote peer, however, since this example is executed

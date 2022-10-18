@@ -9,9 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/coreservice-io/crypto_p2p/wire"
+	"github.com/coreservice-io/crypto_p2p/wire/msg"
 	"github.com/coreservice-io/crypto_p2p/wire/wirebase"
-	"github.com/coreservice-io/crypto_p2p/wire/wmsg"
 
 	"github.com/decred/dcrd/lru"
 )
@@ -40,8 +39,6 @@ var (
 	sentNonces = lru.NewCache(50)
 )
 
-// minUint32 is a helper function to return the minimum of two uint32s.
-// This avoids a math import and the need to cast to floats.
 func minUint32(a, b uint32) uint32 {
 	if a < b {
 		return a
@@ -70,25 +67,21 @@ type Peer struct {
 	connected int32
 
 	longMessages  sync.Map
-
-	// error happens only if caller put bad strange param , e.g error happens peer will break
-	// request_handlers map[uint32]func(resp []byte) []byte
 	request_handlers sync.Map
 
 	peer_mgr *PeerMgr
 
-	flagsMtx        sync.Mutex       // protects the peer flags below
-	na              *wire.NetAddress // Y
-	protocolVersion uint32           // Y negotiated protocol version
-
+	na              *wire.NetAddress
+	protocolVersion uint32          
 	allowSelfConns bool
+
 	// These fields keep track of statistics for the peer and are protected
 	// by the statsMtx mutex.
-	statsMtx sync.RWMutex
+	// statsMtx sync.RWMutex
 
-	lastPingNonce  uint64    // Set to nonce if we have a pending ping.
-	lastPingTime   time.Time // Time we sent last ping.
-	lastPingMicros int64     // Time for last ping to return.
+	// lastPingNonce  uint64    // Set to nonce if we have a pending ping.
+	// lastPingTime   time.Time // Time we sent last ping.
+	// lastPingMicros int64     // Time for last ping to return.
 
 	stallControl  chan stallControlMsg
 	outputQueue   chan outMsg   // msg -> sending queue
@@ -102,6 +95,13 @@ type Peer struct {
 
 func (p *Peer) String() string {
 	return fmt.Sprintf("%s (%s)", p.literalAddr, directionString(p.inbound))
+}
+
+func directionString(inbound bool) string {
+	if inbound {
+		return "inbound"
+	}
+	return "outbound"
 }
 
 func (p *Peer) Addr() string {
@@ -158,14 +158,14 @@ func NewOutboundPeer(cfg *Config, remoteAddr string) (*Peer, error) {
 }
 
 func (p *Peer) start() error {
-	log.Tracef("Starting peer %s", p)
+	log.Traceln("Starting peer %s", p)
 
 	err := p.handshake()
 	if err != nil {
 		return err
 	}
 
-	log.Debugf("Connected to %s", p.Addr())
+	log.Debugln("Connected to %s", p.Addr())
 
 	// go p.stallHandler()
 	go p.inHandler()
@@ -207,26 +207,48 @@ func (p *Peer) start2() error {
 	}
 }
 
-func (p *Peer) Send(msg_cmd uint32, raw_msg []byte) ([]byte, error) {
+func (p *Peer) Send(cmd uint32, content []byte) ([]byte, error) {
+	return p.SendWithTimeout(cmd, content, DEFAULT_REQUEST_TIMEOUT_SECS)
+}
 
-	p_msg := &wmsg.MsgData{
+func (p *Peer) SendWithTimeout(cmd uint32, data []byte, timeout_secs uint32) ([]byte, error) {
+
+	if timeout_secs <= 0 || timeout_secs > REQUEST_TIMEOUT_SECS_MAX {
+		return nil, errors.New("timeout_secs must within range (0, REQUEST_TIMEOUT_SECS_MAX] ")
+	}
+
+	p_msg := &msg.MsgData{
 		Id:         rand.Uint32(),
-		Msg_cmd:    msg_cmd,
-		Msg_chunks: make(chan int32, wirebase.TMU_MAX_NUM+1), // +1 for eof
-		Msg_buffer: bytes.NewBuffer([]byte{}),
+		Msg_cmd:    cmd,
+		Resp_buffer:				bytes.NewBuffer([]byte{}),
+		resp_done:	make(chan bool, 1)
 	}
 
 	p.request_handlers.Store(p_msg.Id, p_msg)
 	defer p.request_handlers.Delete(p_msg.Id)
 
-	// encode the message and send chunk by chunk with writetime out
-	p.QueueMessage(wmsg.NewMsgData(raw_msg), nil)
+	doneChan := make(chan struct{})
 
-	// after send finished,
-	// start to receive from msg_buffer chunk by chunk with readtimeout
-	r, r_err := p_msg.Receive()
-	if r_err != nil {
-		return nil, r_err
+	p.QueueMessage(msg.NewMsgData(data), doneChan)
+
+out:
+	for {
+		select {
+		// case <-doneChan:
+		// 	isSend=true
+		// 	continue out
+		case done := <-p_resp.resp_done:
+			if !done {
+				return nil, errors.New("failed")
+			}
+			return p_resp.buffer.Body.Bytes(), nil
+
+		case <-time.After(time.Second * timeout_secs):
+			if !isSend {
+			fmt.Printf("occur timeout")
+			return timeouts
+			}
+		}
 	}
 
 	return r, nil

@@ -21,9 +21,11 @@ type PeerMgr struct {
 	message_handler *msg.MessageHandler
 
 	// config
-	version    uint32
-	listen     string
-	seed_addrs []wire.PeerAddr
+	version       uint32
+	magic         uint32
+	shake_timeout time.Duration
+	listen        string
+	seed_addrs    []wire.PeerAddr
 }
 
 type MessageHandlerFunc func(msg.Message, *Peer) error
@@ -43,6 +45,8 @@ func InitPeerMgr(version uint32, net_magic uint32, listen string, seeds string) 
 
 	peer_mgr := &PeerMgr{
 		version:         version,
+		magic:           net_magic,
+		shake_timeout:   PEER_HAND_SHAKE_TIMEOUT,
 		listen:          listen,
 		seed_addrs:      seed_addrs,
 		message_handler: message_handler,
@@ -110,7 +114,6 @@ func (pm *PeerMgr) setupOutboundPeer() error {
 			continue
 		}
 
-		// Establish the connection to the peer address.
 		conn, err := net.Dial("tcp", p.Addr())
 		if err != nil {
 			fmt.Printf("net.Dial: error %v\n", err)

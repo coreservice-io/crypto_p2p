@@ -11,12 +11,9 @@ import (
 
 type MsgVersion struct {
 	ProtocolVersion uint32
-
-	Magic uint32
-
-	Port uint32
-
-	Nonce uint64
+	Magic           uint32
+	Port            uint32
+	Nonce           uint64
 }
 
 func (msg *MsgVersion) Encode(w io.Writer, pver uint32) error {
@@ -68,8 +65,6 @@ func (msg *MsgVersion) Command() uint32 {
 
 func NewMsgVersion(magic uint32, port uint32, nonce uint64, protocolVersion uint32) *MsgVersion {
 
-	// Limit the timestamp to one second precision since the protocol
-	// doesn't support better.
 	return &MsgVersion{
 		ProtocolVersion: protocolVersion,
 		Magic:           magic,

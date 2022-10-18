@@ -10,14 +10,13 @@ import (
 
 	"github.com/coreservice-io/crypto_p2p/wire/msg"
 	"github.com/coreservice-io/crypto_p2p/wire/wirebase"
-	"github.com/coreservice-io/crypto_p2p/wire/wmsg"
 )
 
 // outMsg is used to house a message to be sent along with a channel to signal
 // when the message has been sent (or won't be sent due to things such as
 // shutdown)
 type outMsg struct {
-	msg      wirebase.Message
+	msg      msg.Message
 	doneChan chan<- struct{}
 }
 
@@ -44,15 +43,15 @@ const (
 // so it can properly detect and handle stalled remote peers.
 type stallControlMsg struct {
 	command stallControlCmd
-	message wirebase.Message
+	message msg.Message
 }
 
 // sends a reject message for the provided command, reject code, reject reason, and hash.
 // The wait parameter will cause the function to block
 // until the reject message has actually been sent.
-func (p *Peer) PushRejectMsg(command uint32, code wmsg.RejectCode, reason string, wait bool) {
+func (p *Peer) PushRejectMsg(command uint32, code msg.RejectCode, reason string, wait bool) {
 
-	msg := wmsg.NewMsgReject(command, code, reason)
+	msg := msg.NewMsgReject(command, code, reason)
 
 	// Send the message without waiting if the caller has not requested it.
 	if !wait {
@@ -164,7 +163,7 @@ out:
 			case sccHandlerStart:
 				// Warn on unbalanced callback signalling.
 				if handlerActive {
-					log.Warn("Received handler start control command while a " +
+					log.Warnln("Received handler start control command while a " +
 						"handler is already active")
 					continue
 				}
@@ -175,7 +174,7 @@ out:
 			case sccHandlerDone:
 				// Warn on unbalanced callback signalling.
 				if !handlerActive {
-					log.Warn("Received handler done control command when a " +
+					log.Warnln("Received handler done control command when a " +
 						"handler is not already active")
 					continue
 				}
@@ -186,7 +185,7 @@ out:
 				handlerActive = false
 
 			default:
-				log.Warnf("Unsupported message command %v", msg.command)
+				log.Warnln("Unsupported message command %v", msg.command)
 			}
 
 		case <-stallTicker.C:
@@ -204,7 +203,7 @@ out:
 					continue
 				}
 
-				log.Debugf("Peer %s appears to be stalled or misbehaving, %s timeout -- disconnecting",
+				log.Debugln("Peer %s appears to be stalled or misbehaving, %s timeout -- disconnecting",
 					p, command)
 				p.Close()
 				break
@@ -241,12 +240,12 @@ cleanup:
 			break cleanup
 		}
 	}
-	log.Tracef("Peer stall handler done for %s", p)
+	log.Traceln("Peer stall handler done for %s", p)
 }
 
 func (p *Peer) inHandler() {
 	idleTimer := time.AfterFunc(idleTimeout, func() {
-		log.Warnf("Peer %s no answer for %s -- disconnecting", p, idleTimeout)
+		log.Warnln("Peer %s no answer for %s -- disconnecting", p, idleTimeout)
 		p.Close()
 	})
 
@@ -258,13 +257,13 @@ out:
 		idleTimer.Stop()
 		if err != nil {
 			if p.isAllowedReadError(err) {
-				log.Errorf("Allowed test error from %s: %v", p, err)
+				log.Errorln("Allowed test error from %s: %v", p, err)
 				idleTimer.Reset(idleTimeout)
 				continue
 			}
 
-			if err == wmsg.ErrUnknownMessage {
-				log.Debugf("Received unknown message from %s: %v", p, err)
+			if err == msg.ErrUnknownMessage {
+				log.Debugln("Received unknown message from %s: %v", p, err)
 				idleTimer.Reset(idleTimeout)
 				continue
 			}
@@ -272,10 +271,10 @@ out:
 			if p.shouldHandleReadError(err) {
 				errMsg := fmt.Sprintf("Can't read message from %s: %v", p, err)
 				if err != io.ErrUnexpectedEOF {
-					log.Errorf(errMsg)
+					log.Errorln(errMsg)
 				}
 
-				// p.PushRejectMsg(msg.CMD_REJECT, wmsg.RejectMalformed, errMsg, true)
+				// p.PushRejectMsg(msg.CMD_REJECT, msg.RejectMalformed, errMsg, true)
 			}
 			break out
 		}
@@ -304,7 +303,7 @@ out:
 			if handler := p.peer_mgr.GetHandler(rmsg.Command()); handler != nil {
 				handler(rmsg, p)
 			} else {
-				log.Debugf("Received unhandled message of type %v from %v",
+				log.Debugln("Received unhandled message of type %v from %v",
 					rmsg.Command(), p)
 			}
 		}
@@ -321,7 +320,7 @@ out:
 	p.Close()
 
 	close(p.inQuit)
-	log.Tracef("Peer input handler done for %s", p)
+	log.Traceln("Peer input handler done for %s", p)
 }
 
 // handles the queuing of outgoing data for the peer.
@@ -395,19 +394,14 @@ cleanup:
 		}
 	}
 	close(p.queueQuit)
-	log.Tracef("Peer queue handler done for %s", p)
+	log.Traceln("Peer queue handler done for %s", p)
 }
 
-// shouldLogWriteError returns whether or not the passed error,
-// which is expected to have come from writing to the remote peer in the outHandler,
-// should be logged.
 func (p *Peer) shouldLogWriteError(err error) bool {
-	// No logging when the peer is being forcibly disconnected.
 	if atomic.LoadInt32(&p.connected) != 1 {
 		return false
 	}
 
-	// No logging when the remote peer has been disconnected.
 	if err == io.EOF {
 		return false
 	}
@@ -418,10 +412,6 @@ func (p *Peer) shouldLogWriteError(err error) bool {
 	return true
 }
 
-// outHandler handles all outgoing messages for the peer.
-// It must be run as a goroutine.
-// It uses a buffered channel to serialize output messages while
-// allowing the sender to continue running asynchronously.
 func (p *Peer) outHandler() {
 out:
 	for {
@@ -434,7 +424,7 @@ out:
 			if err != nil {
 				p.Close()
 				if p.shouldLogWriteError(err) {
-					log.Errorf("Failed to send message to %s: %v", p, err)
+					log.Errorln("Failed to send message to %s: %v", p, err)
 				}
 				if omsg.doneChan != nil {
 					omsg.doneChan <- struct{}{}
@@ -474,11 +464,27 @@ cleanup:
 		}
 	}
 	close(p.outQuit)
-	log.Tracef("Peer output handler done for %s", p)
+	log.Traceln("Peer output handler done for %s", p)
 }
 
-// adds the passed message to the peer send queue.
-func (p *Peer) QueueMessage(msg wirebase.Message, doneChan chan<- struct{}) {
+func (p *Peer) QueueMessage(msg msg.Message, doneChan chan<- struct{}) {
+
+	// Avoid risk of deadlock if goroutine already exited.
+	// The goroutine we will be sending to hangs around until it knows for a fact that
+	// it is marked as disconnected and *then* it drains the channels.
+	if !p.Connected() {
+		if doneChan != nil {
+			go func() {
+				doneChan <- struct{}{}
+			}()
+		}
+		return
+	}
+
+	p.outputQueue <- outMsg{msg: msg, doneChan: doneChan}
+}
+
+func (p *Peer) QueueMessageResp(msg msg.Message, doneChan chan<- struct{}) {
 
 	// Avoid risk of deadlock if goroutine already exited.
 	// The goroutine we will be sending to hangs around until it knows for a fact that

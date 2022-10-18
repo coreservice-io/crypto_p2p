@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/coreservice-io/crypto_p2p/wire/msg"
-	"github.com/coreservice-io/crypto_p2p/wire/wmsg"
 )
 
 func (p *Peer) readRemoteVersionMsg(magic uint32) error {
@@ -35,20 +34,17 @@ func (p *Peer) readRemoteVersionMsg(magic uint32) error {
 
 	// Negotiate the protocol version and set the services to what the remote peer advertised.
 	p.protocolVersion = minUint32(p.protocolVersion, uint32(message.ProtocolVersion))
-	log.Debugf("Negotiated protocol version %d for peer %s", p.protocolVersion, p)
+	log.Debugln("Negotiated protocol version %d for peer %s", p.protocolVersion, p)
 
 	if uint32(message.ProtocolVersion) < MinAcceptVersion {
-		reason := fmt.Sprintf("protocol version must be %d or greater", MinAcceptVersion)
-		// rejectMsg := msg.NewMsgReject(message.Command(), wmsg.RejectObsolete, reason)
-		// _ = p.writeMessage(rejectMsg)
 		return errors.New("Negotiated error: " +
-			reason)
+			fmt.Sprintf("protocol version must be %d or greater", MinAcceptVersion))
 	}
 
 	return nil
 }
 
-func (p *Peer) processRemoteVerAckMsg(msg *wmsg.MsgVerAck) {
+func (p *Peer) processRemoteVerAckMsg(msg *msg.MsgVerAck) {
 
 }
 
@@ -59,14 +55,14 @@ func (p *Peer) writeLocalVersionMsg(magic uint32) error {
 
 	versionMsg := msg.NewMsgVersion(magic, uint32(p.na.Port), nonce, p.cfg.ProtocolVersion)
 
-	return p.writeMessage(versionMsg, 8)
+	return p.writeMessage(versionMsg)
 }
 
 func (p *Peer) waitToFinishHandShake() error {
 
 	for {
 		remoteMsg, err := p.readMessage()
-		if err == wmsg.ErrUnknownMessage {
+		if err == msg.ErrUnknownMessage {
 			continue
 		} else if err != nil {
 			return err
@@ -92,11 +88,7 @@ func (p *Peer) handshakeIn(magic uint32) error {
 		return err
 	}
 
-	if err := p.writeMessage(wmsg.NewMsgSendAddr()); err != nil {
-		return err
-	}
-
-	err := p.writeMessage(wmsg.NewMsgVerAck())
+	err := p.writeMessage(msg.NewMsgVerAck())
 	if err != nil {
 		return err
 	}
@@ -113,11 +105,7 @@ func (p *Peer) handshakeOut(magic uint32) error {
 		return err
 	}
 
-	if err := p.writeMessage(wmsg.NewMsgSendAddr()); err != nil {
-		return err
-	}
-
-	err := p.writeMessage(wmsg.NewMsgVerAck())
+	err := p.writeMessage(msg.NewMsgVerAck())
 	if err != nil {
 		return err
 	}
@@ -129,9 +117,9 @@ func (p *Peer) handshake() error {
 	hsErr := make(chan error, 1)
 	go func() {
 		if p.inbound {
-			hsErr <- p.handshakeIn()
+			hsErr <- p.handshakeIn(p.peer_mgr.magic)
 		} else {
-			hsErr <- p.handshakeOut()
+			hsErr <- p.handshakeOut(p.peer_mgr.magic)
 		}
 	}()
 
@@ -141,7 +129,7 @@ func (p *Peer) handshake() error {
 			p.Close()
 			return err
 		}
-	case <-time.After(PEER_HAND_SHAKE_TIMEOUT):
+	case <-time.After(p.peer_mgr.shake_timeout):
 		p.Close()
 		return errors.New("protocol hand shake timeout")
 	}

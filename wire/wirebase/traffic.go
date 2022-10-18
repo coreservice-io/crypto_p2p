@@ -50,7 +50,6 @@ var tmu_body_pool = sync.Pool{
 }
 
 func ReadTmuHeader(iostream io.Reader) (int, *tmuHeader, error) {
-	// var headerBytes [TMU_HEADER_SIZE]byte
 
 	header_bytes := tmu_header_pool.Get().([]byte)
 	defer tmu_header_pool.Put(header_bytes)
@@ -64,7 +63,6 @@ func ReadTmuHeader(iostream io.Reader) (int, *tmuHeader, error) {
 		return n, nil, errors.New("header size err")
 	}
 
-	// decoding header
 	hdr := &tmuHeader{
 		cmd:     binary.LittleEndian.Uint32(header_bytes[0:4]),
 		length:  binary.LittleEndian.Uint32(header_bytes[4:8]),
@@ -76,10 +74,6 @@ func ReadTmuHeader(iostream io.Reader) (int, *tmuHeader, error) {
 	return n, hdr, nil
 }
 
-// reads n bytes from reader r in chunks and discards the read bytes.
-// This is used to skip payloads when various errors occur and helps
-// prevent rogue nodes from causing massive memory allocation through
-// forging header length.
 func discardInput(r io.Reader, n uint32) {
 	maxSize := uint32(10 * 1024) // 10k at a time
 	numReads := n / maxSize
@@ -96,7 +90,7 @@ func discardInput(r io.Reader, n uint32) {
 	}
 }
 
-func WriteMessage(w io.Writer, cmd uint32, data []byte, timeout_secs int) (int, error) {
+func WriteMessage(w io.Writer, cmd uint32, data []byte) (int, error) {
 
 	data_len := len(data)
 
@@ -259,12 +253,6 @@ func ReadTmu(iostream io.Reader) (int, *tmuHeader, []byte, error) {
 		str := fmt.Sprintf("Tmu payload idx is wrong - tmu idx %d(%d).",
 			hdr.tmu_num, hdr.tmu_idx)
 		return totalBytes, nil, nil, NewMessageError("ReadTmu", str)
-	}
-
-	err := isCmdValid(hdr.cmd)
-	if err != nil {
-		discardInput(iostream, hdr.length)
-		return totalBytes, nil, nil, err
 	}
 
 	payload := make([]byte, hdr.length)
