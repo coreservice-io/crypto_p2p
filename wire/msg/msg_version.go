@@ -18,12 +18,14 @@ type MsgVersion struct {
 
 func (msg *MsgVersion) Encode(w io.Writer, pver uint32) error {
 
-	result := make([]byte, 16)
+	result := make([]byte, 20)
 
 	binary.LittleEndian.PutUint32(result[0:4], msg.ProtocolVersion)
 	binary.LittleEndian.PutUint32(result[4:8], msg.Magic)
 	binary.LittleEndian.PutUint32(result[8:12], msg.Port)
-	binary.LittleEndian.PutUint64(result[12:16], msg.Nonce)
+	binary.LittleEndian.PutUint64(result[12:20], msg.Nonce)
+
+	w.Write(result)
 
 	return nil
 }

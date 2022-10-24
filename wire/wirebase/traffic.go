@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"math/rand"
 	"sync"
 )
 
@@ -16,12 +15,14 @@ const TMU_MAX_SIZE = 1024 * 8 // 8KB
 // number for maxium size of a single message.
 const TMU_MAX_NUM = 1024
 
-// the maximum bytes of a single message 8MB
-const MSG_PAYLOAD_MAX_SIZE = (TMU_MAX_SIZE * TMU_MAX_NUM)
-
 const TMU_HEADER_SIZE = 20
 
-type tmuHeader struct {
+const TMU_MAX_PAYLOAD_SIZE = TMU_MAX_SIZE - TMU_HEADER_SIZE
+
+// the maximum bytes of a single message 8MB
+const MSG_PAYLOAD_MAX_SIZE = (TMU_MAX_PAYLOAD_SIZE * TMU_MAX_NUM)
+
+type TmuHeader struct {
 	cmd     uint32
 	length  uint32
 	id      uint32
@@ -29,12 +30,20 @@ type tmuHeader struct {
 	tmu_num uint32
 }
 
-func (hdr *tmuHeader) Cmd() uint32 {
+func (hdr *TmuHeader) Cmd() uint32 {
 	return hdr.cmd
 }
 
-func (hdr *tmuHeader) Id() uint32 {
+func (hdr *TmuHeader) Id() uint32 {
 	return hdr.id
+}
+
+func (hdr *TmuHeader) SeqNo() uint32 {
+	return hdr.tmu_idx
+}
+
+func (hdr *TmuHeader) SeqLen() uint32 {
+	return hdr.tmu_num
 }
 
 var tmu_header_pool = sync.Pool{
@@ -49,7 +58,7 @@ var tmu_body_pool = sync.Pool{
 	},
 }
 
-func ReadTmuHeader(iostream io.Reader) (int, *tmuHeader, error) {
+func ReadTmuHeader(iostream io.Reader) (int, *TmuHeader, error) {
 
 	header_bytes := tmu_header_pool.Get().([]byte)
 	defer tmu_header_pool.Put(header_bytes)
@@ -63,7 +72,7 @@ func ReadTmuHeader(iostream io.Reader) (int, *tmuHeader, error) {
 		return n, nil, errors.New("header size err")
 	}
 
-	hdr := &tmuHeader{
+	hdr := &TmuHeader{
 		cmd:     binary.LittleEndian.Uint32(header_bytes[0:4]),
 		length:  binary.LittleEndian.Uint32(header_bytes[4:8]),
 		id:      binary.LittleEndian.Uint32(header_bytes[8:12]),
@@ -90,7 +99,7 @@ func discardInput(r io.Reader, n uint32) {
 	}
 }
 
-func WriteMessage(w io.Writer, cmd uint32, data []byte) (int, error) {
+func WriteMessage(w io.Writer, id uint32, cmd uint32, data []byte) (int, error) {
 
 	data_len := len(data)
 
@@ -101,31 +110,30 @@ func WriteMessage(w io.Writer, cmd uint32, data []byte) (int, error) {
 		return 0, NewMessageError("WriteMessage", str)
 	}
 
-	chunks := int(math.Ceil(float64(data_len) / TMU_MAX_SIZE))
+	chunks := int(math.Ceil(float64(data_len) / (TMU_MAX_PAYLOAD_SIZE)))
 	if chunks == 0 {
 		chunks = 1
 	}
 
 	totalBytes := 0
 
-	id := rand.Uint32()
-
 	for i := 0; i < chunks; i++ {
-		start_p := i * TMU_MAX_SIZE
-		end_p := (i + 1) * TMU_MAX_SIZE
+		idx := i + 1
+		start_p := i * TMU_MAX_PAYLOAD_SIZE
+		end_p := (i + 1) * TMU_MAX_PAYLOAD_SIZE
 		if end_p >= data_len {
 			end_p = data_len
 		}
 		tmu_payload := data[start_p:end_p]
 
-		hdr := &tmuHeader{
+		hdr := &TmuHeader{
 			id:      id,
 			cmd:     cmd,
 			tmu_num: uint32(chunks),
-			tmu_idx: uint32(i + 1),
+			tmu_idx: uint32(idx),
 		}
 
-		n, err := WriteTmu(w, hdr, tmu_payload)
+		n, err := writeTmu(w, hdr, tmu_payload)
 		if err != nil {
 			return 0, err
 		}
@@ -136,53 +144,38 @@ func WriteMessage(w io.Writer, cmd uint32, data []byte) (int, error) {
 	return totalBytes, nil
 }
 
-func ReadMessage(iostream io.Reader, longMessages sync.Map) (*tmuHeader, []byte, error) {
-
-	for {
-		_, tmu_hdr, tmu_payload, err := ReadTmu(iostream)
-		if err != nil {
-			return nil, tmu_payload, err
-		}
-
-		msg_payload, err := CombineTmu(longMessages, tmu_hdr, tmu_payload)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		if msg_payload != nil {
-			return tmu_hdr, msg_payload, err
-		}
-	}
-}
-
-func CombineTmu(longMessages sync.Map,
-	hdr *tmuHeader, payload []byte) ([]byte, error) {
+func CombineTmuWithMap(message_map *sync.Map,
+	hdr *TmuHeader, payload []byte) ([]byte, error) {
 	if hdr.tmu_num == 1 {
 		return payload, nil
 	}
 
 	if hdr.tmu_num >= hdr.tmu_idx {
-		longBuf, exists := longMessages.Load(hdr.id)
+		longBuf, exists := message_map.Load(hdr.id)
 		if !exists {
-			longBuf = bytes.NewBuffer(payload)
-			longMessages.Store(hdr.id, longBuf)
-		} else {
-			longBuf.(*bytes.Buffer).Write(payload)
+			longBuf = bytes.NewBuffer(make([]byte, 0))
+			message_map.Store(hdr.id, longBuf)
 		}
+
+		return CombineTmu(longBuf.(*bytes.Buffer), hdr, payload)
+	}
+
+	// not build msg
+	return nil, nil
+}
+
+func CombineTmu(longBuf *bytes.Buffer,
+	hdr *TmuHeader, payload []byte) ([]byte, error) {
+
+	longBuf.Write(payload)
+
+	if hdr.tmu_num == 1 {
+		return payload, nil
 	}
 
 	// last one
 	if hdr.tmu_num == hdr.tmu_idx {
-		longBuf, exists := longMessages.Load(hdr.id)
-		if !exists {
-			longBuf = bytes.NewBuffer(payload)
-			longMessages.Store(hdr.id, longBuf)
-		} else {
-			longBuf.(*bytes.Buffer).Write(payload)
-		}
-
-		payload = longBuf.(*bytes.Buffer).Bytes()
-
+		payload := longBuf.Bytes()
 		return payload, nil
 	}
 
@@ -190,7 +183,7 @@ func CombineTmu(longMessages sync.Map,
 	return nil, nil
 }
 
-func WriteTmu(iostream io.Writer, hdr *tmuHeader, payload []byte) (int, error) {
+func writeTmu(iostream io.Writer, hdr *TmuHeader, payload []byte) (int, error) {
 
 	lenp := len(payload)
 
@@ -232,7 +225,17 @@ func WriteTmu(iostream io.Writer, hdr *tmuHeader, payload []byte) (int, error) {
 	return totalBytes, err
 }
 
-func ReadTmu(iostream io.Reader) (int, *tmuHeader, []byte, error) {
+func ReadTrafficUnit(iostream io.Reader) (*TmuHeader, []byte, error) {
+
+	_, tmu_hdr, tmu_payload, err := readTmu(iostream)
+	if err != nil {
+		return nil, tmu_payload, err
+	}
+
+	return tmu_hdr, tmu_payload, err
+}
+
+func readTmu(iostream io.Reader) (int, *TmuHeader, []byte, error) {
 
 	totalBytes := 0
 	n, hdr, err := ReadTmuHeader(iostream)
@@ -245,14 +248,14 @@ func ReadTmu(iostream io.Reader) (int, *tmuHeader, []byte, error) {
 		str := fmt.Sprintf("Tmu payload is too large - header "+
 			"indicates %d bytes, but max message payload is %d bytes.",
 			hdr.length, TMU_MAX_SIZE)
-		return totalBytes, nil, nil, NewMessageError("ReadTmu", str)
+		return totalBytes, nil, nil, fmt.Errorf(str)
 	}
 
 	if hdr.tmu_num > 1 &&
 		(hdr.tmu_idx > hdr.tmu_num || hdr.tmu_idx == 0) {
 		str := fmt.Sprintf("Tmu payload idx is wrong - tmu idx %d(%d).",
 			hdr.tmu_num, hdr.tmu_idx)
-		return totalBytes, nil, nil, NewMessageError("ReadTmu", str)
+		return totalBytes, nil, nil, fmt.Errorf(str)
 	}
 
 	payload := make([]byte, hdr.length)

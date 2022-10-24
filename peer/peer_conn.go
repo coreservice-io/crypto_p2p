@@ -1,8 +1,9 @@
 package peer
 
 import (
-	"bytes"
 	"errors"
+	"fmt"
+	"math/rand"
 	"net"
 	"sync/atomic"
 
@@ -15,25 +16,29 @@ func (p *Peer) Connected() bool {
 	return atomic.LoadInt32(&p.connected) != 0
 }
 
-func (p *Peer) AttachConn(conn net.Conn) error {
+func (p *Peer) AttachConn(conn net.Conn, cfg *PeerConfig) error {
 	if !atomic.CompareAndSwapInt32(&p.connected, 0, 1) {
 		return errors.New("Already Attach Conn")
 	}
+
+	p.loadCfg(cfg)
+
 	p.conn = conn
 
 	if p.inbound {
 		addr := p.conn.RemoteAddr()
 		p.literalAddr = addr.String()
 
-		na, err := wire.NewNetAddress(addr)
+		var err error
+		p.na, err = wire.NewPeerAddress(addr)
 		if err != nil {
 			p.Close()
 			return err
 		}
-		p.na = na
 	}
 
 	if err := p.start(); err != nil {
+		llog.Errorln(fmt.Sprintf("%v Start Error. Reason: %s", p, err))
 		p.Close()
 		return err
 	}
@@ -42,7 +47,7 @@ func (p *Peer) AttachConn(conn net.Conn) error {
 
 func (p *Peer) Close() {
 	if atomic.CompareAndSwapInt32(&p.connected, 1, 0) {
-		log.Debugln("Disconnecting %s", p)
+		llog.Traceln("Disconnecting %s", p)
 		p.conn.Close()
 	}
 
@@ -53,61 +58,34 @@ func (p *Peer) WaitForClose() {
 	<-p.quit
 }
 
-func (p *Peer) readMsgBytes() (uint32, []byte, error) {
-	hdr, msg_payload, err := wirebase.ReadMessage(p.conn, p.longMessages)
-	if err != nil {
-		return 0, nil, err
-	}
+func (p *Peer) readTrafficUnit() (*wirebase.TmuHeader, []byte, error) {
+	hdr, tmu_payload, err := wirebase.ReadTrafficUnit(p.conn)
 
-	return (*hdr).Cmd(), msg_payload, err
+	return hdr, tmu_payload, err
 }
 
-func (p *Peer) writeMsgBytes(cmd uint32, data []byte) error {
+func (p *Peer) writeMessage(cmd uint32, payload []byte) error {
 	if atomic.LoadInt32(&p.connected) != 1 {
 		return nil
 	}
 
-	_, err := wirebase.WriteMessage(p.conn, cmd, data)
+	id := rand.Uint32()
+
+	_, err := wirebase.WriteMessage(p.conn, id, cmd, payload)
 
 	return err
 }
 
-func (p *Peer) readMessage() (msg.Message, error) {
-	hdr, msg_payload, err := wirebase.ReadMessage(p.conn, p.longMessages)
-	if err != nil {
-		return nil, err
-	}
-
-	message, err := p.peer_mgr.message_handler.MakeEmptyMessage((*hdr).Cmd())
-	if err != nil {
-		return message, err
-	}
-
-	pr := bytes.NewBuffer(msg_payload)
-	pver := p.ProtocolVersion()
-	err = message.Decode(pr, pver)
-	if err != nil {
-		return nil, err
-	}
-
-	return message, nil
-}
-
-func (p *Peer) writeMessage(message msg.Message) error {
+func (p *Peer) writeMsgOutWrap(msgOutWrap *msg.MsgOutWrap) error {
 	if atomic.LoadInt32(&p.connected) != 1 {
 		return nil
 	}
 
-	var bw bytes.Buffer
+	payload := msgOutWrap.Req
 
-	pver := p.ProtocolVersion()
-	err := message.Encode(&bw, pver)
-	if err != nil {
-		return err
-	}
-	payload := bw.Bytes()
+	llog.Traceln(fmt.Sprintf("sending msg cmd %d", msgOutWrap.Cmd))
 
-	_, err = wirebase.WriteMessage(p.conn, message.Command(), payload)
+	_, err := wirebase.WriteMessage(p.conn, msgOutWrap.Id(), msgOutWrap.Cmd, payload)
 
 	return err
 }

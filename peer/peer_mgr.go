@@ -11,24 +11,26 @@ import (
 	"github.com/coreservice-io/crypto_p2p/wire/msg"
 )
 
-const PEER_HAND_SHAKE_TIMEOUT = 15 * time.Second
+const PEER_HAND_SHAKE_TIMEOUT_SEC = 15
+
+type PeerConfig struct {
+	version       uint32
+	magic         uint32
+	shake_timeout time.Duration
+}
 
 type PeerMgr struct {
 	ib_peers sync.Map
 	ob_peers sync.Map
 
-	MsgHandlers     sync.Map
-	message_handler *msg.MessageHandler
+	message_handler *sync.Map
 
-	// config
-	version       uint32
-	magic         uint32
-	shake_timeout time.Duration
-	listen        string
-	seed_addrs    []wire.PeerAddr
+	config     PeerConfig
+	listen     string
+	seed_addrs []wire.PeerAddr
 }
 
-type MessageHandlerFunc func(msg.Message, *Peer) error
+type MessageHandlerFunc func([]byte, *msg.HandlerMsgCtx, *Peer) error
 
 func InitPeerMgr(version uint32, net_magic uint32, listen string, seeds string) (*PeerMgr, error) {
 
@@ -37,19 +39,17 @@ func InitPeerMgr(version uint32, net_magic uint32, listen string, seeds string) 
 		return nil, err
 	}
 
-	message_handler, err := msg.InitMessageHandler()
-	if err != nil {
-		return nil, err
+	pmCfg := &PeerConfig{
+		version:       version,
+		magic:         net_magic,
+		shake_timeout: PEER_HAND_SHAKE_TIMEOUT_SEC,
 	}
-	message_handler.RegMessage(&msg.MsgPing{})
 
 	peer_mgr := &PeerMgr{
-		version:         version,
-		magic:           net_magic,
-		shake_timeout:   PEER_HAND_SHAKE_TIMEOUT,
+		config:          *pmCfg,
 		listen:          listen,
 		seed_addrs:      seed_addrs,
-		message_handler: message_handler,
+		message_handler: new(sync.Map),
 	}
 	return peer_mgr, nil
 }
@@ -58,20 +58,24 @@ func (pm *PeerMgr) Seeds() []wire.PeerAddr {
 	return pm.seed_addrs
 }
 
-// register a msg
-func (pm *PeerMgr) RegRequestHandler(message msg.Message, callback MessageHandlerFunc) error {
-	if err := pm.message_handler.RegMessage(message); err != nil {
-		return errors.New("cmd handler overlap")
-	}
-	return nil
+func (pm *PeerMgr) IbPeers() *sync.Map {
+	return &pm.ib_peers
 }
 
 func (pm *PeerMgr) Start() error {
+
+	pm.initStartupHandler()
 
 	pm.setupInboundServer(pm.listen)
 
 	pm.setupOutboundPeer()
 	return nil
+}
+
+func (pm *PeerMgr) initStartupHandler() {
+	llog.Traceln("init handler when startup")
+
+	pm.RegHandler(msg.CMD_PING, handlePingMsg)
 }
 
 func (pm *PeerMgr) setupInboundServer(listenAddr string) error {
@@ -88,8 +92,8 @@ func (pm *PeerMgr) setupInboundServer(listenAddr string) error {
 				return
 			}
 
-			p := NewInboundPeer(nil)
-			err = p.AttachConn(conn)
+			p := NewInboundPeer()
+			err = p.AttachConn(conn, &pm.config)
 			if err != nil {
 				return
 			}
@@ -108,22 +112,25 @@ func (pm *PeerMgr) setupInboundServer(listenAddr string) error {
 func (pm *PeerMgr) setupOutboundPeer() error {
 
 	for _, addr := range pm.seed_addrs {
-		p, err := NewOutboundPeer(nil, addr.String())
+
+		p, err := NewOutboundPeer(addr.String())
 		if err != nil {
-			fmt.Printf("NewOutboundPeer: error %v\n", err)
+			llog.Errorln(fmt.Sprintf("NewOutboundPeer error. Reason: %v", err))
 			continue
 		}
 
 		conn, err := net.Dial("tcp", p.Addr())
 		if err != nil {
-			fmt.Printf("net.Dial: error %v\n", err)
+			llog.Errorln(fmt.Sprintf("[peer] Outbound error. Reason: %v", err))
 			continue
 		}
-		p.AttachConn(conn)
+
+		p.AttachConn(conn, &pm.config)
+
 		err = pm.AddPeer(p)
 		if err != nil {
 			p.Close()
-			fmt.Printf("net.Dial: error %v\n", err)
+			llog.Errorln(fmt.Sprintf("[peer] Outbound error. Reason: %v", err))
 		}
 	}
 
@@ -132,14 +139,15 @@ func (pm *PeerMgr) setupOutboundPeer() error {
 
 func (pm *PeerMgr) AddPeer(p *Peer) error {
 
-	var peer_pool sync.Map
+	var peer_pool *sync.Map
 	if p.inbound {
-		peer_pool = pm.ib_peers
+		peer_pool = &pm.ib_peers
 	} else {
-		peer_pool = pm.ob_peers
+		peer_pool = &pm.ob_peers
 	}
 
-	if _, exists := peer_pool.LoadOrStore(p.na.host, p); exists {
+	p.PutMgr(pm)
+	if _, exists := peer_pool.LoadOrStore(p.na.Host(), p); exists {
 		return errors.New("ip overlap")
 	}
 
@@ -147,24 +155,35 @@ func (pm *PeerMgr) AddPeer(p *Peer) error {
 }
 
 func (pm *PeerMgr) RemovePeer(p *Peer) {
-	var peer_pool sync.Map
+	var peer_pool *sync.Map
 	if p.inbound {
-		peer_pool = pm.ib_peers
+		peer_pool = &pm.ib_peers
 	} else {
-		peer_pool = pm.ob_peers
+		peer_pool = &pm.ob_peers
 	}
 
-	peer_pool.Delete(p.na.host)
+	peer_pool.Delete(p.na.Host())
 	p.Close()
 }
 
 func (pm *PeerMgr) RegHandler(msg_cmd uint32, handler MessageHandlerFunc) {
-	pm.MsgHandlers.Store(msg_cmd, handler)
+	pm.message_handler.Store(msg_cmd, handler)
+
+	// if _, ok := hm.handlers[msg_cmd]; ok {
+	// 	return errors.New("cmd handler overlap")
+	// }
+	// hm.handlers[msg_cmd] = message
+	// return nil
 }
 
 func (pm *PeerMgr) GetHandler(msg_cmd uint32) MessageHandlerFunc {
-	if h_i, ok := pm.MsgHandlers.Load(msg_cmd); ok {
+	if h_i, ok := pm.message_handler.Load(msg_cmd); ok {
+		llog.Traceln(fmt.Sprintf("find handler for cmd %d", msg_cmd))
+
 		return h_i.(MessageHandlerFunc)
 	}
+
+	llog.Traceln(fmt.Sprintf("can't find handler for cmd %d", msg_cmd))
+
 	return nil
 }

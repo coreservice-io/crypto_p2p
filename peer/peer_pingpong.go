@@ -1,18 +1,19 @@
 package peer
 
 import (
+	"encoding/binary"
+	"fmt"
+	"math/rand"
 	"time"
 
 	"github.com/coreservice-io/crypto_p2p/wire/msg"
-	"github.com/coreservice-io/crypto_p2p/wire/wirebase"
 )
 
 const pingInterval = 1 * time.Minute
 
 func (p *Peer) pingHandler() {
 
-	p.peer_mgr.RegHandler(msg.CMD_PING, handlePingMsg)
-	p.peer_mgr.RegHandler(msg.CMD_PONG, handlePongMsg)
+	llog.Traceln("start ping %v", p)
 
 	pingTicker := time.NewTicker(pingInterval)
 	defer pingTicker.Stop()
@@ -21,18 +22,22 @@ out:
 	for {
 		select {
 		case <-pingTicker.C:
-			nonce, err := wirebase.RandomUint64()
+			nonce := uint64(rand.Int63())
+
+			b := make([]byte, 8)
+			binary.LittleEndian.PutUint64(b, nonce)
+
+			llog.Traceln("sending ping %v", p)
+
+			res, err := p.SendWithTimeout(msg.CMD_PING, b, 10)
 			if err != nil {
-				log.Errorln("Not sending ping to %s: %v", p, err)
-				continue
+				llog.Errorln("can't ping to %s: %v", p, err)
+				p.Close()
+				break
 			}
 
-			p.statsMtx.Lock()
-			p.lastPingNonce = nonce
-			p.lastPingTime = time.Now()
-			p.statsMtx.Unlock()
-
-			p.QueueMessage(msg.NewMsgPing(nonce), nil)
+			pnonce := binary.LittleEndian.Uint64(res)
+			llog.Traceln("receive %s: receive %v. %v", nonce, pnonce, p)
 
 		case <-p.quit:
 			break out
@@ -40,65 +45,13 @@ out:
 	}
 }
 
-func handlePingMsg(m msg.Message, p *Peer) error {
+func handlePingMsg(msg_payload []byte, ctx *msg.HandlerMsgCtx, p *Peer) error {
 
-	message := m.(*msg.MsgPing)
-	p.QueueMessage(msg.NewMsgPong(message.Nonce), nil)
+	pnonce := binary.LittleEndian.Uint64(msg_payload)
 
-	return nil
-}
+	llog.Traceln(fmt.Sprintf("%s recieve ping: %v", p, pnonce))
 
-func handlePongMsg(m msg.Message, p *Peer) error {
-
-	message := m.(*msg.MsgPong)
-
-	p.statsMtx.Lock()
-	if p.lastPingNonce != 0 && message.Nonce == p.lastPingNonce {
-		p.lastPingMicros = time.Since(p.lastPingTime).Nanoseconds()
-		p.lastPingMicros /= 1000 // convert to usec.
-		p.lastPingNonce = 0
-	}
-	p.statsMtx.Unlock()
-
-	return nil
-}
-
-func (p *Peer) pingHandler2() {
-
-	p.peer_mgr.RegHandler(msg.CMD_PING, handlePingMsg2)
-
-	pingTicker := time.NewTicker(pingInterval)
-	defer pingTicker.Stop()
-
-out:
-	for {
-		select {
-		case <-pingTicker.C:
-			nonce, err := wirebase.RandomUint64()
-			if err != nil {
-				log.Errorln("Not sending ping to %s: %v", p, err)
-				continue
-			}
-
-			p.SendWithTimeout(msg.CMD_PING, nonce.bytes, 8)
-			if err != nil {
-				log.Errorln("Not sending ping to %s: %v", p, err)
-				continue
-			}
-
-		case <-p.quit:
-			break out
-		}
-	}
-}
-
-func handlePingMsg2(m msg.Message, p *Peer) error {
-
-	message := m.(*msg.MsgPing)
-
-	p.writeMessage(omsg.msg)
-
-	p.QueueMessageResp(msg.NewMsgPong(message.Nonce), nil)
+	ctx.Send(msg_payload)
 
 	return nil
 }
